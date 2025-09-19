@@ -133,6 +133,41 @@ pub async fn ask(
     })
 }
 
+pub async fn get_embedding(
+    http: &reqwest::Client,
+    cfg: &AiConfig,
+    input: &str,
+) -> Result<Vec<f32>, AiError> {
+    // --- client/config ---
+    let key = cfg.openai_api_key.as_ref().ok_or(AiError::Auth)?;
+    let mut oai_cfg = OpenAIConfig::new().with_api_base(cfg.openai_base_url.clone());
+    oai_cfg = oai_cfg.with_api_key(key.clone());
+    let client = Client::with_config(oai_cfg).with_http_client(http.clone());
+
+    let model = "text-embedding-ada-002";
+
+    let req = async_openai::types::CreateEmbeddingRequestArgs::default()
+        .model(model)
+        .input(vec![input.to_string()])
+        .build()
+        .map_err(|e| AiError::Provider(e.to_string()))?;
+
+    println!("Embedding request: {:?}", req);
+
+    let resp = client
+        .embeddings()
+        .create(req)
+        .await
+        .map_err(map_oai_err)?;
+
+    let embedding = resp.data
+        .get(0)
+        .map(|e| e.embedding.clone())
+        .unwrap_or_default();
+
+    Ok(embedding)
+}
+
 fn finish_reason_str(fr: &FinishReason) -> &'static str {
     match fr {
         FinishReason::Stop => "stop",
@@ -161,3 +196,4 @@ fn map_oai_err(e: async_openai::error::OpenAIError) -> AiError {
         other => AiError::Provider(other.to_string()),
     }
 }
+

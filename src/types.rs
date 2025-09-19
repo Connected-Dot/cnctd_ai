@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderId {
-    Openai,       // OpenAI (or Azure OpenAI if your base_url points there)
-    Openrouter,   // OpenRouter (OpenAI-compatible gateway)
+    OpenAI,       // OpenAI (or Azure OpenAI if your base_url points there)
+    OpenRouter,   // OpenRouter (OpenAI-compatible gateway)
     Anthropic,    // Claude (adapter to add later)
     // Add others later (e.g., Gemini)
 }

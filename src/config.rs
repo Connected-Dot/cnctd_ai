@@ -34,12 +34,12 @@ impl AiConfig {
             default_provider: std::env::var("AI_DEFAULT_PROVIDER")
                 .ok()
                 .and_then(|s| match s.as_str() {
-                    "openai" => Some(ProviderId::Openai),
-                    "openrouter" => Some(ProviderId::Openrouter),
+                    "openai" => Some(ProviderId::OpenAI),
+                    "openrouter" => Some(ProviderId::OpenRouter),
                     "anthropic" => Some(ProviderId::Anthropic),
                     _ => None,
                 })
-                .unwrap_or(ProviderId::Openai),
+                .unwrap_or(ProviderId::OpenAI),
             default_model: std::env::var("AI_DEFAULT_MODEL")
                 .unwrap_or_else(|_| "gpt-4.1-mini".to_string()),
 

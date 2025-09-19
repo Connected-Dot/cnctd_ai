@@ -4,13 +4,14 @@ use std::time::Instant;
 
 use serde::de::DeserializeOwned;
 
+use crate::client::openai::get_embedding;
 use crate::config::AiConfig;
 use crate::error::AiError;
 use crate::types::{AskRequest, Role, UniversalResponse};
 use crate::util::parse_json;
 
 pub mod openai;
-pub mod anthropic; // stub for later
+pub mod anthropic; 
 
 pub struct UniversalClient {
     cfg: AiConfig,
@@ -33,7 +34,7 @@ impl UniversalClient {
 
         let started = Instant::now();
         let mut resp = match req.provider {
-            crate::types::ProviderId::Openai | crate::types::ProviderId::Openrouter => {
+            crate::types::ProviderId::OpenAI | crate::types::ProviderId::OpenRouter => {
                 openai::ask(&self.http, &self.cfg, &req).await
             }
             crate::types::ProviderId::Anthropic => anthropic::ask(&self.http, &self.cfg, &req).await,
@@ -80,5 +81,13 @@ impl UniversalClient {
         if req.options.stream.is_none() {
             req.options.stream = Some(false);
         }
+    }
+
+    pub async fn get_embedding(&self, text: &str) -> Result<Vec<f32>, AiError> {
+        let embedding = get_embedding(&self.http, &self.cfg, text).await?;
+
+        println!("Embedding: {:?}", embedding);
+
+        Ok(embedding)
     }
 }

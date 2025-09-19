@@ -9,7 +9,6 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde_json::{json, Value};
 
 pub mod config;
-pub mod api;
 pub mod error;
 pub mod client;
 pub mod types;
