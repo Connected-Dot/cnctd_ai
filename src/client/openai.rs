@@ -13,13 +13,13 @@ use async_openai::Client;
 
 use crate::config::AiConfig;
 use crate::error::AiError;
-use crate::types::{AskRequest, Msg, Role, UniversalResponse, Usage};
+use crate::types::{AskRequest, Msg, Role, AskResponse, Usage};
 
 pub async fn ask(
     http: &reqwest::Client,
     cfg: &AiConfig,
     req: &AskRequest,
-) -> Result<UniversalResponse, AiError> {
+) -> Result<AskResponse, AiError> {
     // --- client/config ---
     let key = cfg.openai_api_key.as_ref().ok_or(AiError::Auth)?;
     let mut oai_cfg = OpenAIConfig::new().with_api_base(cfg.openai_base_url.clone());
@@ -124,7 +124,7 @@ pub async fn ask(
         total_tokens: Some(u.total_tokens as u32),
     });
 
-    Ok(UniversalResponse {
+    Ok(AskResponse {
         text,
         finish_reason,
         usage,
