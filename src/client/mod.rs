@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use crate::client::openai::get_embedding;
 use crate::config::AiConfig;
 use crate::error::AiError;
-use crate::types::{AskRequest, Role, UniversalResponse};
+use crate::types::{AskRequest, Role, AskResponse};
 use crate::util::parse_json;
 
 pub mod openai;
@@ -29,7 +29,7 @@ impl UniversalClient {
     }
 
     /// Free-form chat; normalized response.
-    pub async fn ask(&self, mut req: AskRequest) -> Result<UniversalResponse, AiError> {
+    pub async fn ask(&self, mut req: AskRequest) -> Result<AskResponse, AiError> {
         self.hydrate_defaults(&mut req);
 
         let started = Instant::now();

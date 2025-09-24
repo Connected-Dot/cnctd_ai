@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Provider selector (keep ids stable for client/server).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "lowercase")]
 pub enum ProviderId {
     OpenAI,       // OpenAI (or Azure OpenAI if your base_url points there)
     OpenRouter,   // OpenRouter (OpenAI-compatible gateway)
@@ -26,6 +26,7 @@ pub enum Role {
 
 /// One message in your canonical transcript.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Msg {
     pub role: Role,
     pub content: String,
@@ -35,6 +36,7 @@ pub struct Msg {
 
 /// Per-call generation knobs (leave unset to use server defaults).
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct AskOptions {
     pub temperature: Option<f32>,       // e.g., Some(0.2)
     pub max_output_tokens: Option<u32>, // e.g., Some(512)
@@ -44,6 +46,7 @@ pub struct AskOptions {
 
 /// The request shape your universal client expects.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AskRequest {
     pub provider: ProviderId,   // which adapter to use
     pub model: Option<String>,  // provider-native model id; fallback to config default
@@ -66,7 +69,8 @@ pub struct Usage {
 
 /// Provider-agnostic response your app can rely on.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UniversalResponse {
+#[serde(rename_all = "camelCase")]
+pub struct AskResponse {
     pub text: String,                // final answer string (may be empty on tool calls)
     pub finish_reason: String,       // normalized: "stop" | "length" | "tool_call" | "content_filter" | "error"
     #[serde(default)]

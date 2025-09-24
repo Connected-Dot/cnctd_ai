@@ -3,13 +3,13 @@ use serde_json::{json, Value};
 
 use crate::config::AiConfig;
 use crate::error::AiError;
-use crate::types::{AskRequest, Msg, Role, UniversalResponse};
+use crate::types::{AskRequest, Msg, Role, AskResponse};
 
 pub async fn ask(
     _http: &reqwest::Client,
     cfg: &AiConfig,
     req: &AskRequest,
-) -> Result<UniversalResponse, AiError> {
+) -> Result<AskResponse, AiError> {
     // --- client/config ---
     let key = cfg.anthropic_api_key.as_ref().ok_or(AiError::Auth)?;
     
@@ -70,7 +70,7 @@ pub async fn ask(
     let final_text = result_text.lock().unwrap().clone();
     
     // --- build response ---
-    Ok(UniversalResponse {
+    Ok(AskResponse {
         text: final_text,
         finish_reason: "stop".to_string(),
         usage: None, // This SDK doesn't provide usage info easily
