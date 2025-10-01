@@ -1,7 +1,12 @@
 [package]
 name = "cnctd_ai"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
+authors = ["Connected Dot Inc.", "Kyle Ebner <kyle@cnctd.world>"]
+description = "AI and LLM utilities"
+repository = "https://github.com/Connected-Dot/cnctd_server"
+license = "MIT"
+keywords = ["module"]
 
 [dependencies]
 anthropic-sdk = "0.1.5"
