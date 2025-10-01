@@ -10,6 +10,8 @@ pub enum AiError {
     Provider(String),
     #[error("json error: {0}")]
     Json(String),
+    #[error("http error: {0}")]
+    Http(String),
     #[error("unknown model: {0}")]
     UnknownModel(String),
     #[error("unsupported provider")]

@@ -1,92 +1,72 @@
-use async_openai::config::OpenAIConfig;
-use async_openai::Client;
-use async_openai::types::{
-    CreateChatCompletionRequestArgs,
-    ChatCompletionRequestUserMessageArgs,   // <- use role-specific builders
-    // ChatCompletionRequestSystemMessageArgs, // add if you want a system prompt
-};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use std::pin::Pin;
+
+use futures_core::Stream;
 use serde_json::{json, Value};
 
-pub mod config;
+use crate::ask::config::AskConfig;
+use crate::ask::request::{AskChunk, AskRequest};
+use crate::client::anthropic::AnthropicApi;
+use crate::client::openai::OpenAiApi;
+use crate::client::ProviderAPI;
+use crate::error::AiError;
+
 pub mod error;
 pub mod client;
-pub mod types;
+pub mod ask;
+// pub mod types;
 pub mod util;
 
 pub struct CnctdAi;
 
 impl CnctdAi {
-    pub async fn ask(msg: &str) -> Result<Value, async_openai::error::OpenAIError> {
-        // let client = Client::new();
-        let client = openrouter_client().map_err(|e| async_openai::error::OpenAIError::StreamError(e.to_string()))?;
-        println!("client: {:?}", client);
+    pub async fn ask(ask_request: AskRequest, ask_config: AskConfig) -> Result<Value, AiError> {
+        let ask_response = match ask_config.api {
+            ProviderAPI::OpenAI => OpenAiApi::ask(ask_config, &ask_request).await?,
+            ProviderAPI::Anthropic => AnthropicApi::ask(ask_config, &ask_request).await?,
+        };
 
-        let models = client.models().list().await;
-
-        println!("models: {:?}", models);
-
-        // pick a real model; keep it in env so you can swap providers
-        // let model = std::env::var("AI_MODEL").unwrap_or_else(|_| "gpt-5".to_string());
-        let model = "openrouter/auto".to_string();
-
-        let messages = vec![
-            // If you want a system message, add it first:
-            // ChatCompletionRequestSystemMessageArgs::default()
-            //     .content("You are terse.")
-            //     .build()?.into(),
-            ChatCompletionRequestUserMessageArgs::default()
-                .content(msg)
-                .build()?
-                .into(),
-        ];
-
-        let request = CreateChatCompletionRequestArgs::default()
-            .model(model)
-            .messages(messages)
-            .build()?;
-
-        println!("request: {:?}", request);
-
-        let response = client.chat().create(request).await?;
-        println!("response: {:?}", response);
-
-        let answer = response.clone().choices
-            .into_iter()
-            .find_map(|c| c.message.content)
-            .unwrap_or_default();
-
-        Ok(json!({ "response": answer, "raw": response }) )
+        Ok(json!(ask_response) )
     }
 
-    pub async fn get_models() -> Result<Value, async_openai::error::OpenAIError> {
-        let client = Client::new();
-        // println!("client: {:?}", client);
+    pub async fn ask_stream<'a>(ask_request: &'a AskRequest, ask_config: AskConfig) -> Result<Pin<Box<dyn Stream<Item = Result<AskChunk, AiError>> + Send + 'a>>, AiError> {
+        match ask_config.api {
+            ProviderAPI::OpenAI => {
+                let s = OpenAiApi::ask_stream(ask_config, ask_request).await?;
+                let s: Pin<Box<dyn Stream<Item = Result<AskChunk, AiError>> + Send + 'a>> = Box::pin(s);
+                Ok(s)
+            }
+            ProviderAPI::Anthropic => {
+                let s = AnthropicApi::ask_stream(ask_config, ask_request).await?;
+                let s: Pin<Box<dyn Stream<Item = Result<AskChunk, AiError>> + Send + 'a>> = Box::pin(s);
+                Ok(s)
+            }
+        }
+    }
 
-        let config = client.config();
+    pub async fn get_models(ask_config: &AskConfig) -> Result<Value, AiError> {
+        let models = match ask_config.api {
+            ProviderAPI::OpenAI => OpenAiApi::get_models(ask_config).await?,
+            ProviderAPI::Anthropic => AnthropicApi::get_models(ask_config).await?,
+        };
 
-        println!("config: {:?}", config);
-        let models = client.models().list().await?;
-        models.data.iter().for_each(|m| println!("model: {:?}", m));
-
-        Ok(json!({ "models": models.data }) )
+        Ok(models)
     }
 }
 
 
-fn openrouter_client() -> Result<Client<OpenAIConfig>, Box<dyn std::error::Error>> {
-    let key = std::env::var("OPENROUTER_API_KEY")?;
+// fn openrouter_client() -> Result<Client<OpenAIConfig>, Box<dyn std::error::Error>> {
+//     let key = std::env::var("OPENROUTER_API_KEY")?;
 
-    // Optional but recommended attribution headers (helps with rate limits/analytics on their end)
-    let mut headers = HeaderMap::new();
-    headers.insert(AUTHORIZATION, HeaderValue::from_str(&format!("Bearer {}", key))?);
-    headers.insert("Content-Type", HeaderValue::from_static("application/json"));
+//     // Optional but recommended attribution headers (helps with rate limits/analytics on their end)
+//     let mut headers = HeaderMap::new();
+//     headers.insert(AUTHORIZATION, HeaderValue::from_str(&format!("Bearer {}", key))?);
+//     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
 
-    let http = reqwest::Client::builder()
-        .user_agent("cnctd-ai/0.1")
-        .default_headers(headers)
-        .build()?;
+//     let http = reqwest::Client::builder()
+//         .user_agent("cnctd-ai/0.1")
+//         .default_headers(headers)
+//         .build()?;
 
-    let cfg = OpenAIConfig::new().with_api_base("https://openrouter.ai/api/v1");
-    Ok(Client::with_config(cfg).with_http_client(http))
-}
+//     let cfg = OpenAIConfig::new().with_api_base("https://openrouter.ai/api/v1");
+//     Ok(Client::with_config(cfg).with_http_client(http))
+// }
