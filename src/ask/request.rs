@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::ask::{msg::Msg, response::AskResponse};
+use crate::ask::{connector::Connector, msg::Msg, response::AskResponse};
 
 /// Per-call generation knobs (leave unset to use server defaults).
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -25,6 +25,7 @@ pub struct AskRequest {
     pub context_refs: Vec<String>, // optional ids (conversation, project, doc)
     pub provider: String,       // e.g., "openai" or "anthropic"
     pub model: String,          // e.g., "gpt-4o" or
+    pub mcp_servers: Vec<Connector>, // MCP server connectors
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

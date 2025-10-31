@@ -14,6 +14,8 @@ pub enum AiError {
     Http(String),
     #[error("unknown model: {0}")]
     UnknownModel(String),
+    #[error("mcp error: {0}")]
+    McpError(String),
     #[error("unsupported provider")]
     Unsupported,
 }

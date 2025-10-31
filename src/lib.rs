@@ -1,6 +1,7 @@
 use std::pin::Pin;
 
 use futures_core::Stream;
+use rmcp::model::{ListToolsResult, Tool};
 use serde_json::{json, Value};
 
 use crate::ask::config::AskConfig;
@@ -9,12 +10,14 @@ use crate::client::anthropic::AnthropicApi;
 use crate::client::openai::OpenAiApi;
 use crate::client::ProviderAPI;
 use crate::error::AiError;
+use crate::mcp::{list_tools_http, Auth, McpClient};
 
 pub mod error;
 pub mod client;
 pub mod ask;
 // pub mod types;
 pub mod util;
+pub mod mcp;
 
 pub struct CnctdAi;
 
@@ -50,6 +53,23 @@ impl CnctdAi {
         };
 
         Ok(models)
+    }
+
+    pub async fn list_tools(url: &str, auth: Auth) -> Result<Vec<Tool>, AiError> {
+        let tools = list_tools_http(
+            url,
+            auth,
+        ).await.map_err(|e| AiError::McpError(e.to_string()))?;
+
+        Ok(tools)
+    }
+
+    pub async fn connect_mcp(url: &str, auth: Auth) -> Result<(McpClient, Vec<Tool>), AiError> {
+        let mut client = McpClient::new(url.to_string(), auth);
+        client.connect().await.map_err(|e| AiError::McpError(e.to_string()))?;
+        let tools = client.list_tools().await.map_err(|e| AiError::McpError(e.to_string()))?;
+
+        return Ok((client, tools));
     }
 }
 
