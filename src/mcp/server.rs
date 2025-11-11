@@ -7,6 +7,7 @@ use rmcp::{
     transport::StreamableHttpClientTransport,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Map;
 use tokio::sync::Mutex;
 
 use crate::{error::AiError, mcp::Auth};
@@ -200,10 +201,15 @@ impl McpConnection {
     {
         let peer = self.peer().await;
         
+        let arguments_map = Map::from(serde_json::to_value(args)
+            .map_err(|e| AiError::McpError(format!("serialize args: {e}")))?
+            .as_object()
+            .ok_or_else(|| AiError::McpError("args must serialize to a JSON object".into()))?
+            .clone());
         // Create the proper request parameter
         let param = CallToolRequestParam {
-            name: name.to_string(),
-            arguments: Some(serde_json::to_value(&args).map_err(|e| AiError::McpError(format!("serialize args: {e}")))?),
+            name: name.to_string().into(),
+            arguments: Some(arguments_map)
         };
         
         let result = peer

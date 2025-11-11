@@ -1,6 +1,25 @@
-use crate::mcp::Auth;
+use serde::{Deserialize, Serialize};
 
+use crate::mcp::{Auth, server::McpServer};
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct McpGateway {
     pub url: String,
     pub auth: Auth,
+}
+
+impl McpGateway {
+    pub fn new<U>(url: U, auth: Auth) -> Self
+    where
+        U: Into<String>,
+    {
+        Self {
+            url: url.into(),
+            auth,
+        }
+    }
+
+    pub fn get_mcp_servers(&self) -> Vec<McpServer> {
+        
+    }
 }
