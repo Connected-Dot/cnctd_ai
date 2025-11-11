@@ -10,7 +10,8 @@ use crate::client::anthropic::AnthropicApi;
 use crate::client::openai::OpenAiApi;
 use crate::client::ProviderAPI;
 use crate::error::AiError;
-use crate::mcp::{list_tools_http, Auth, McpClient};
+use crate::mcp::Auth;
+
 
 pub mod error;
 pub mod client;
@@ -55,22 +56,27 @@ impl CnctdAi {
         Ok(models)
     }
 
-    pub async fn list_tools(url: &str, auth: Auth) -> Result<Vec<Tool>, AiError> {
-        let tools = list_tools_http(
-            url,
-            auth,
-        ).await.map_err(|e| AiError::McpError(e.to_string()))?;
+    // pub async fn list_tools(url: &str, auth: Auth) -> Result<Vec<Tool>, AiError> {
+    //     let tools = list_tools_http(
+    //         url,
+    //         auth,
+    //     ).await.map_err(|e| AiError::McpError(e.to_string()))?;
 
-        Ok(tools)
-    }
+    //     Ok(tools)
+    // }
 
-    pub async fn connect_mcp(url: &str, auth: Auth) -> Result<(McpClient, Vec<Tool>), AiError> {
-        let mut client = McpClient::new(url.to_string(), auth);
-        client.connect().await.map_err(|e| AiError::McpError(e.to_string()))?;
-        let tools = client.list_tools().await.map_err(|e| AiError::McpError(e.to_string()))?;
+    // pub async fn connect_mcp(url: &str, auth: Auth) -> Result<(McpClient, Vec<Tool>), AiError> {
+    //     let mut client = McpClient::new(url.to_string(), auth);
+    //     client.connect().await.map_err(|e| AiError::McpError(e.to_string()))?;
+    //     let tools = client.list_tools().await.map_err(|e| AiError::McpError(e.to_string()))?;
 
-        return Ok((client, tools));
-    }
+    //     return Ok((client, tools));
+    // }
+
+    // pub async fn discover_mcps(gateway_url: &str) -> Result<Vec<String>, AiError> {
+    //     let mcps = mcp::discover_mcps(gateway_url).await.map_err(|e| AiError::McpError(e.to_string()))?;
+    //     Ok(mcps)
+    // }
 }
 
 
