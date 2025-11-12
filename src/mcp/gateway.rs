@@ -19,7 +19,12 @@ impl McpGateway {
         }
     }
 
-    pub fn get_mcp_servers(&self) -> Vec<McpServer> {
+    // pub async fn list_servers(&self) -> Vec<McpServer> {
+    //     let body = reqwest::get(&self.url)
+    //         .await?
+    //         .json()
+    //         .await?;
+            
         
-    }
+    // }
 }
