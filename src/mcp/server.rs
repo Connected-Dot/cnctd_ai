@@ -1,13 +1,7 @@
 use std::{sync::Arc, time::{Duration, Instant}};
-
-use rmcp::{
-    ServiceExt,
-    model::{ClientCapabilities, Implementation, ProtocolVersion, Tool, CallToolRequestParam, ReadResourceRequestParam},
-    service::{Peer, RoleClient, RunningService},
-    transport::StreamableHttpClientTransport,
-};
+use reqwest::{Client, header::{HeaderMap, HeaderValue, AUTHORIZATION}};
 use serde::{Deserialize, Serialize};
-use serde_json::Map;
+use serde_json::{json, Map, Value};
 use tokio::sync::Mutex;
 
 use crate::{error::AiError, mcp::Auth};
@@ -68,41 +62,43 @@ impl McpServer {
     pub async fn connect(&self) -> Result<McpConnection, AiError> {
         eprintln!("Connecting to MCP server at {}...", self.url);
 
-        let initialized = Arc::new(Mutex::new(false));
-        let request_id = Arc::new(Mutex::new(0));
-
-        // Defaults are fine for first contact; initialize is negotiated by the service layer.
-        let _client_caps = ClientCapabilities::default();
-        let _client_info = Implementation::default();
-        let _proto = ProtocolVersion::LATEST;
-
-        // IMPORTANT: `serve(...)` returns a `RunningService<RoleClient, ()>`, not a `Peer`.
-        let running: RunningService<RoleClient, ()> = match self.connection_type {
-            ConnectionType::Http => {
-                // Requires: rmcp = { version = "0.8.3", features = ["client", "transport-streamable-http-client-reqwest"] }
-                let transport = StreamableHttpClientTransport::from_uri(self.url.as_str());
-                ().serve(transport)
-                    .await
-                    .map_err(|e| AiError::McpError(format!("serve http client: {e}")))? 
+        let mut headers = HeaderMap::new();
+        
+        // Apply auth headers
+        match &self.auth {
+            Auth::Bearer(token) => {
+                headers.insert(
+                    AUTHORIZATION,
+                    HeaderValue::from_str(&format!("Bearer {}", token))
+                        .map_err(|e| AiError::McpError(format!("invalid bearer token: {e}")))?
+                );
             }
-            ConnectionType::Stdio => {
-                return Err(AiError::McpError("ConnectionType::Stdio not implemented yet".into()));
-            }
-            ConnectionType::WebSocket => {
-                return Err(AiError::McpError("ConnectionType::WebSocket not implemented yet".into()));
-            }
-        };
-
-        {
-            let mut flag = initialized.lock().await;
-            *flag = true;
+            // Auth::ApiKey { header, key } => {
+            //     headers.insert(
+            //         header.parse().map_err(|e| AiError::McpError(format!("invalid header name: {e}")))?,
+            //         HeaderValue::from_str(key)
+            //             .map_err(|e| AiError::McpError(format!("invalid api key: {e}")))?
+            //     );
+            // }
+            // Auth::Basic { username, password } => {
+            //     let credentials = base64::encode(format!("{}:{}", username, password));
+            //     headers.insert(
+            //         AUTHORIZATION,
+            //         HeaderValue::from_str(&format!("Basic {}", credentials))
+            //             .map_err(|e| AiError::McpError(format!("invalid basic auth: {e}")))?
+            //     );
+            // }
+            Auth::None => {}
         }
+
+        let client = Client::builder()
+            .default_headers(headers)
+            .build()
+            .map_err(|e| AiError::McpError(format!("build http client: {e}")))?;
 
         Ok(McpConnection {
             server: self.clone(),
-            initialized,
-            request_id,
-            running: Arc::new(Mutex::new(running)),
+            client: Arc::new(client),
             tools_cache: Arc::new(Mutex::new(None)),
         })
     }
@@ -111,40 +107,40 @@ impl McpServer {
 #[derive(Debug, Clone)]
 pub struct McpConnection {
     pub server: McpServer,
-    pub initialized: Arc<Mutex<bool>>,
-    pub request_id: Arc<Mutex<i32>>,
-    // Keep the running service alive; derive Peer<RoleClient> from it for calls.
-    running: Arc<Mutex<RunningService<RoleClient, ()>>>,
-    // Per-connection tools cache: (tools, last_refreshed)
-    tools_cache: Arc<Mutex<Option<(Vec<Tool>, Instant)>>>,
+    client: Arc<Client>,
+    tools_cache: Arc<Mutex<Option<(Vec<Value>, Instant)>>>,
 }
 
 impl McpConnection {
-    /// Internal: get a clone of the Peer<RoleClient>.
-    async fn peer(&self) -> Peer<RoleClient> {
-        let running = self.running.lock().await;
-        running.peer().clone()
-    }
-
-    /// Force-refresh the tool list from the server and update the cache.
-    pub async fn refresh_tools(&self) -> Result<Vec<Tool>, AiError> {
-        let peer = self.peer().await;
-        let tools = peer
-            .list_all_tools()
+    /// List all tools (assuming standard MCP JSON-RPC endpoint)
+    pub async fn refresh_tools(&self) -> Result<Vec<Value>, AiError> {
+        let response = self.client
+            .post(&self.server.url)
+            .json(&json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": {}
+            }))
+            .send()
             .await
-            .map_err(|e| AiError::McpError(format!("list_all_tools: {e}")))?;
+            .map_err(|e| AiError::McpError(format!("tools/list request: {e}")))?;
 
-        {
-            let mut cache = self.tools_cache.lock().await;
-            *cache = Some((tools.clone(), Instant::now()));
-        }
+        let result: Value = response.json().await
+            .map_err(|e| AiError::McpError(format!("parse tools/list response: {e}")))?;
+
+        let tools = result["result"]["tools"]
+            .as_array()
+            .ok_or_else(|| AiError::McpError("tools/list response missing tools array".into()))?
+            .clone();
+
+        let mut cache = self.tools_cache.lock().await;
+        *cache = Some((tools.clone(), Instant::now()));
+        
         Ok(tools)
     }
 
-    /// Get tools, honoring an optional staleness window.
-    /// - If `max_age` is None and cache exists, return cached.
-    /// - If cache is missing/stale, refresh.
-    pub async fn get_tools(&self, max_age: Option<Duration>) -> Result<Vec<Tool>, AiError> {
+    pub async fn get_tools(&self, max_age: Option<Duration>) -> Result<Vec<Value>, AiError> {
         if let Some(max_age) = max_age {
             if let Some((cached, t0)) = &*self.tools_cache.lock().await {
                 if t0.elapsed() <= max_age {
@@ -157,66 +153,76 @@ impl McpConnection {
         self.refresh_tools().await
     }
 
-    /// Example: get a single page of tools if you ever want pagination control.
-    pub async fn list_tools_page(
-        &self,
-        page: Option<rmcp::model::PaginatedRequestParam>,
-    ) -> Result<rmcp::model::ListToolsResult, AiError> {
-        let peer = self.peer().await;
-        peer.list_tools(page)
+    pub async fn call_tool(&self, name: &str, args: Value) -> Result<Value, AiError> {
+        let response = self.client
+            .post(&self.server.url)
+            .json(&json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": name,
+                    "arguments": args
+                }
+            }))
+            .send()
             .await
-            .map_err(|e| AiError::McpError(format!("list_tools: {e}")))
+            .map_err(|e| AiError::McpError(format!("tools/call request: {e}")))?;
+
+        let result: Value = response.json().await
+            .map_err(|e| AiError::McpError(format!("parse tools/call response: {e}")))?;
+
+        if let Some(error) = result.get("error") {
+            return Err(AiError::McpError(format!("tool call error: {}", error)));
+        }
+
+        Ok(result["result"].clone())
     }
 
     pub async fn list_all_resources(&self) -> Result<Vec<String>, AiError> {
-        let peer = self.peer().await;
-        let resources = peer
-            .list_all_resources()
+        let response = self.client
+            .post(&self.server.url)
+            .json(&json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "resources/list",
+                "params": {}
+            }))
+            .send()
             .await
-            .map_err(|e| AiError::McpError(format!("list_all_resources: {e}")))?;
-        
-        // Extract URI from Annotated<RawResource>
-        Ok(resources.into_iter().map(|r| r.raw.uri).collect())
+            .map_err(|e| AiError::McpError(format!("resources/list request: {e}")))?;
+
+        let result: Value = response.json().await
+            .map_err(|e| AiError::McpError(format!("parse resources/list response: {e}")))?;
+
+        let resources = result["result"]["resources"]
+            .as_array()
+            .ok_or_else(|| AiError::McpError("resources/list response missing resources array".into()))?
+            .iter()
+            .filter_map(|r| r["uri"].as_str().map(String::from))
+            .collect();
+
+        Ok(resources)
     }
 
-    pub async fn read_resource(&self, uri: &str) -> Result<rmcp::model::ReadResourceResult, AiError> {
-        let peer = self.peer().await;
-        
-        // Create the proper request parameter
-        let param = ReadResourceRequestParam {
-            uri: uri.to_string(),
-        };
-        
-        let result = peer
-            .read_resource(param)
+    pub async fn read_resource(&self, uri: &str) -> Result<Value, AiError> {
+        let response = self.client
+            .post(&self.server.url)
+            .json(&json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "resources/read",
+                "params": {
+                    "uri": uri
+                }
+            }))
+            .send()
             .await
-            .map_err(|e| AiError::McpError(format!("read_resource: {e}")))?;
-        
-        Ok(result)
-    }
+            .map_err(|e| AiError::McpError(format!("resources/read request: {e}")))?;
 
-    pub async fn call_tool<T>(&self, name: &str, args: T) -> Result<rmcp::model::CallToolResult, AiError>
-    where
-        T: Serialize,
-    {
-        let peer = self.peer().await;
-        
-        let arguments_map = Map::from(serde_json::to_value(args)
-            .map_err(|e| AiError::McpError(format!("serialize args: {e}")))?
-            .as_object()
-            .ok_or_else(|| AiError::McpError("args must serialize to a JSON object".into()))?
-            .clone());
-        // Create the proper request parameter
-        let param = CallToolRequestParam {
-            name: name.to_string().into(),
-            arguments: Some(arguments_map)
-        };
-        
-        let result = peer
-            .call_tool(param)
-            .await
-            .map_err(|e| AiError::McpError(format!("call_tool: {e}")))?;
-        
-        Ok(result)
+        let result: Value = response.json().await
+            .map_err(|e| AiError::McpError(format!("parse resources/read response: {e}")))?;
+
+        Ok(result["result"].clone())
     }
 }
