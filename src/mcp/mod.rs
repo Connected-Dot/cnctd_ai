@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod gateway;
 pub mod server;
+pub mod requests;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

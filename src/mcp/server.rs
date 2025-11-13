@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tokio::sync::Mutex;
 
-use crate::{error::AiError, mcp::Auth};
+use crate::{error::AiError, mcp::{Auth, requests::JsonRpcRequest}};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ConnectionType {
@@ -112,22 +112,27 @@ pub struct McpConnection {
 }
 
 impl McpConnection {
-    /// List all tools (assuming standard MCP JSON-RPC endpoint)
-    pub async fn refresh_tools(&self) -> Result<Vec<Value>, AiError> {
+    /// Generic request executor
+    async fn execute(&self, request: JsonRpcRequest) -> Result<Value, AiError> {
         let response = self.client
             .post(&self.server.url)
-            .json(&json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/list",
-                "params": {}
-            }))
+            .json(&request.build())
             .send()
             .await
-            .map_err(|e| AiError::McpError(format!("tools/list request: {e}")))?;
+            .map_err(|e| AiError::McpError(format!("request failed: {e}")))?;
 
         let result: Value = response.json().await
-            .map_err(|e| AiError::McpError(format!("parse tools/list response: {e}")))?;
+            .map_err(|e| AiError::McpError(format!("parse response: {e}")))?;
+
+        if let Some(error) = result.get("error") {
+            return Err(AiError::McpError(format!("rpc error: {}", error)));
+        }
+
+        Ok(result)
+    }
+
+    pub async fn refresh_tools(&self) -> Result<Vec<Value>, AiError> {
+        let result = self.execute(JsonRpcRequest::tools_list()).await?;
 
         let tools = result["result"]["tools"]
             .as_array()
@@ -154,46 +159,12 @@ impl McpConnection {
     }
 
     pub async fn call_tool(&self, name: &str, args: Value) -> Result<Value, AiError> {
-        let response = self.client
-            .post(&self.server.url)
-            .json(&json!({
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {
-                    "name": name,
-                    "arguments": args
-                }
-            }))
-            .send()
-            .await
-            .map_err(|e| AiError::McpError(format!("tools/call request: {e}")))?;
-
-        let result: Value = response.json().await
-            .map_err(|e| AiError::McpError(format!("parse tools/call response: {e}")))?;
-
-        if let Some(error) = result.get("error") {
-            return Err(AiError::McpError(format!("tool call error: {}", error)));
-        }
-
+        let result = self.execute(JsonRpcRequest::tools_call(name, args)).await?;
         Ok(result["result"].clone())
     }
 
     pub async fn list_all_resources(&self) -> Result<Vec<String>, AiError> {
-        let response = self.client
-            .post(&self.server.url)
-            .json(&json!({
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "resources/list",
-                "params": {}
-            }))
-            .send()
-            .await
-            .map_err(|e| AiError::McpError(format!("resources/list request: {e}")))?;
-
-        let result: Value = response.json().await
-            .map_err(|e| AiError::McpError(format!("parse resources/list response: {e}")))?;
+        let result = self.execute(JsonRpcRequest::resources_list()).await?;
 
         let resources = result["result"]["resources"]
             .as_array()
@@ -206,23 +177,7 @@ impl McpConnection {
     }
 
     pub async fn read_resource(&self, uri: &str) -> Result<Value, AiError> {
-        let response = self.client
-            .post(&self.server.url)
-            .json(&json!({
-                "jsonrpc": "2.0",
-                "id": 4,
-                "method": "resources/read",
-                "params": {
-                    "uri": uri
-                }
-            }))
-            .send()
-            .await
-            .map_err(|e| AiError::McpError(format!("resources/read request: {e}")))?;
-
-        let result: Value = response.json().await
-            .map_err(|e| AiError::McpError(format!("parse resources/read response: {e}")))?;
-
+        let result = self.execute(JsonRpcRequest::resources_read(uri)).await?;
         Ok(result["result"].clone())
     }
 }
