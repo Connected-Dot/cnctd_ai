@@ -49,3 +49,9 @@ impl From<std::io::Error> for AiError {
         AiError::Provider(err.to_string())
     }
 }
+
+impl From<reqwest::Error> for AiError {
+    fn from(err: reqwest::Error) -> Self {
+        AiError::from_reqwest_error(err)
+    }
+}

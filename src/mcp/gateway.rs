@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-use crate::mcp::{Auth, server::McpServer};
+use crate::{error::AiError, mcp::{Auth, server::McpServer}};
+
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct McpGateway {
     pub url: String,
     pub auth: Auth,
+    pub servers: Vec<McpServer>
 }
 
 impl McpGateway {
@@ -15,16 +17,18 @@ impl McpGateway {
     {
         Self {
             url: url.into(),
-            auth,
+            auth: auth.into(),
+            servers: Vec::new(),
         }
     }
 
-    // pub async fn list_servers(&self) -> Vec<McpServer> {
-    //     let body = reqwest::get(&self.url)
-    //         .await?
-    //         .json()
-    //         .await?;
+    pub async fn list_servers(&self) -> Result<Vec<McpServer>, AiError> {
+        let servers: Vec<McpServer> = reqwest::get(&self.url)
+            .await?
+            .json()
+            .await?;
             
+        Ok(servers) 
         
-    // }
+    }
 }
