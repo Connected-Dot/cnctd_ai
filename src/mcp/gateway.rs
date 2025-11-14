@@ -59,6 +59,7 @@ impl McpGateway {
                 Some(server_info.description),
                 ConnectionType::Http,
             );
+            
             let connection = server.connect().await?;
             connections.push(connection);
         };

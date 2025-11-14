@@ -1,7 +1,6 @@
 use std::pin::Pin;
 
 use futures_core::Stream;
-use rmcp::model::{ListToolsResult, Tool};
 use serde_json::{json, Value};
 
 use crate::ask::config::AskConfig;
@@ -12,6 +11,12 @@ use crate::client::ProviderAPI;
 use crate::error::AiError;
 use crate::mcp::Auth;
 
+pub use rmcp::model::{
+    Tool,
+    CallToolResult,
+    Content,
+    CallToolRequestParam,
+};
 
 pub mod error;
 pub mod client;
