@@ -1,10 +1,10 @@
 use std::{sync::Arc, time::{Duration, Instant}};
 use reqwest::{Client, header::{HeaderMap, HeaderValue, AUTHORIZATION}};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-use crate::{error::AiError, mcp::{Auth, requests::JsonRpcRequest}};
+use crate::{error::AiError, mcp::{Auth, Tool, ListToolsResult, CallToolResult, requests::JsonRpcRequest}};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ConnectionType {
@@ -73,21 +73,6 @@ impl McpServer {
                         .map_err(|e| AiError::McpError(format!("invalid bearer token: {e}")))?
                 );
             }
-            // Auth::ApiKey { header, key } => {
-            //     headers.insert(
-            //         header.parse().map_err(|e| AiError::McpError(format!("invalid header name: {e}")))?,
-            //         HeaderValue::from_str(key)
-            //             .map_err(|e| AiError::McpError(format!("invalid api key: {e}")))?
-            //     );
-            // }
-            // Auth::Basic { username, password } => {
-            //     let credentials = base64::encode(format!("{}:{}", username, password));
-            //     headers.insert(
-            //         AUTHORIZATION,
-            //         HeaderValue::from_str(&format!("Basic {}", credentials))
-            //             .map_err(|e| AiError::McpError(format!("invalid basic auth: {e}")))?
-            //     );
-            // }
             Auth::None => {}
         }
 
@@ -108,7 +93,7 @@ impl McpServer {
 pub struct McpConnection {
     pub server: McpServer,
     client: Arc<Client>,
-    tools_cache: Arc<Mutex<Option<(Vec<Value>, Instant)>>>,
+    tools_cache: Arc<Mutex<Option<(Vec<Tool>, Instant)>>>,
 }
 
 impl McpConnection {
@@ -131,21 +116,22 @@ impl McpConnection {
         Ok(result)
     }
 
-    pub async fn refresh_tools(&self) -> Result<Vec<Value>, AiError> {
+    /// Refresh the tools cache by fetching from the server
+    pub async fn refresh_tools(&self) -> Result<Vec<Tool>, AiError> {
         let result = self.execute(JsonRpcRequest::tools_list()).await?;
 
-        let tools = result["result"]["tools"]
-            .as_array()
-            .ok_or_else(|| AiError::McpError("tools/list response missing tools array".into()))?
-            .clone();
+        // Parse the result using proper types
+        let tools_result: ListToolsResult = serde_json::from_value(result["result"].clone())
+            .map_err(|e| AiError::McpError(format!("parse tools/list result: {e}")))?;
 
         let mut cache = self.tools_cache.lock().await;
-        *cache = Some((tools.clone(), Instant::now()));
+        *cache = Some((tools_result.tools.clone(), Instant::now()));
         
-        Ok(tools)
+        Ok(tools_result.tools)
     }
 
-    pub async fn get_tools(&self, max_age: Option<Duration>) -> Result<Vec<Value>, AiError> {
+    /// Get tools from cache or fetch if needed
+    pub async fn get_tools(&self, max_age: Option<Duration>) -> Result<Vec<Tool>, AiError> {
         if let Some(max_age) = max_age {
             if let Some((cached, t0)) = &*self.tools_cache.lock().await {
                 if t0.elapsed() <= max_age {
@@ -158,11 +144,18 @@ impl McpConnection {
         self.refresh_tools().await
     }
 
-    pub async fn call_tool(&self, name: &str, args: Value) -> Result<Value, AiError> {
+    /// Call a tool on the server
+    pub async fn call_tool(&self, name: &str, args: Value) -> Result<CallToolResult, AiError> {
         let result = self.execute(JsonRpcRequest::tools_call(name, args)).await?;
-        Ok(result["result"].clone())
+        
+        // Parse the result using proper types
+        let tool_result: CallToolResult = serde_json::from_value(result["result"].clone())
+            .map_err(|e| AiError::McpError(format!("parse tools/call result: {e}")))?;
+        
+        Ok(tool_result)
     }
 
+    /// List all resources available on the server
     pub async fn list_all_resources(&self) -> Result<Vec<String>, AiError> {
         let result = self.execute(JsonRpcRequest::resources_list()).await?;
 
@@ -176,6 +169,7 @@ impl McpConnection {
         Ok(resources)
     }
 
+    /// Read a specific resource from the server
     pub async fn read_resource(&self, uri: &str) -> Result<Value, AiError> {
         let result = self.execute(JsonRpcRequest::resources_read(uri)).await?;
         Ok(result["result"].clone())
