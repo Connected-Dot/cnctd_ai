@@ -1,8 +1,9 @@
-use rmcp::model::Tool;
 use serde::{Deserialize, Serialize};
 
-use crate::{error::AiError, mcp::{Auth, server::{ConnectionType, McpConnection, McpServer}}};
-
+use crate::{
+    error::AiError,
+    mcp::{Auth, server::{ConnectionType, McpConnection, McpServer}}
+};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct McpServerInfo {
@@ -10,7 +11,6 @@ pub struct McpServerInfo {
     pub url: String,
     pub description: String,
     pub status: String,
-    // pub tools: Vec<ToolInfo>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -44,7 +44,6 @@ impl McpGateway {
             .await?;
             
         Ok(servers) 
-        
     }
 
     pub async fn connect_all_servers(&mut self) -> Result<Vec<McpConnection>, AiError> {
