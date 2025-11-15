@@ -1,14 +1,6 @@
 use async_openai::config::OpenAIConfig;
 use async_openai::types::{
-    ChatCompletionRequestAssistantMessageArgs,
-    ChatCompletionRequestMessage,
-    ChatCompletionRequestSystemMessageArgs,
-    ChatCompletionRequestToolMessageArgs,
-    ChatCompletionRequestUserMessageArgs,
-    CreateChatCompletionRequestArgs,
-    CreateChatCompletionRequest, // <-- add this import
-    FinishReason,
-    ResponseFormat,
+    ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs, ChatCompletionTool, ChatCompletionToolType, CreateChatCompletionRequest, CreateChatCompletionRequestArgs, FinishReason, FunctionObject, ResponseFormat
 };
 use async_openai::Client;
 use futures_util::StreamExt;
@@ -273,6 +265,26 @@ fn build_openai_request(
     }
     if request.options.json_mode.unwrap_or(false) {
         builder.response_format(ResponseFormat::JsonObject);
+    }
+
+    if !request.tools.is_empty() {
+        let mut tools = Vec::new();
+        
+        for tool in &request.tools {
+            let function = FunctionObject {
+                name: tool.name.to_string(),
+                description: tool.description.as_ref().map(|d| d.to_string()),
+                parameters: Some(serde_json::Value::Object((*tool.input_schema).clone())),
+                strict: None,
+            };
+            
+            tools.push(ChatCompletionTool {
+                r#type: ChatCompletionToolType::Function,
+                function,
+            });
+        }
+        
+        builder.tools(tools);
     }
 
     builder.build().map_err(|e| AiError::Provider(e.to_string()))
