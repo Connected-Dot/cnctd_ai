@@ -38,6 +38,11 @@ pub struct GatewayInfo {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct GatewayResponse {
+    pub servers: Vec<McpServerInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct McpGateway {
     pub url: String,
     pub auth: Auth,
@@ -85,12 +90,21 @@ impl McpGateway {
     }
 
     pub async fn get_gateway_info(&self) -> Result<GatewayInfo, AiError> {
-        let servers: GatewayInfo = reqwest::get(&self.url)
+        let servers: GatewayResponse = reqwest::get(&self.url)
             .await?
             .json()
             .await?;
+
+        let gateway_info = GatewayInfo {
+            name: url::Url::parse(&self.url)
+                .ok()
+                .and_then(|u| u.host_str().map(String::from))
+                .unwrap_or_else(|| self.url.clone()),
+            url: self.url.clone(),
+            servers: servers.servers,
+        };
             
-        Ok(servers) 
+        Ok(gateway_info) 
     }
 
     pub async fn connect_all_servers(&mut self) -> Result<(GatewayInfo, Vec<McpConnection>), AiError> {
