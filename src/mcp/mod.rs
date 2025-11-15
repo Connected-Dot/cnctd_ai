@@ -22,7 +22,7 @@ pub use rmcp::model::{
     
     // Request/Response types
     ListToolsResult,
-    ListToolsRequestParam,
+    ListToolsRequest,
     
     // Resource types
     Resource,
