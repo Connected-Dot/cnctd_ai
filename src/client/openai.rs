@@ -65,50 +65,52 @@ impl OpenAiApi {
         config: AskConfig,
         request: &AskRequest,
     ) -> Result<impl Stream<Item = Result<AskChunk, AiError>> + Send, AiError> {
-        
-
         let client = Self::get_client(&config).await?;
-        let req = build_openai_request(&config, request)?; // <-- reuse same builder logic
-
+        let req = build_openai_request(&config, request)?;
+    
         let mut stream = client.chat().create_stream(req).await.map_err(map_oai_err)?;
-
+    
         let mut full_text = String::new();
         let mut finish_reason: Option<String> = None;
         let mut provider_meta = serde_json::json!({});
         let mut usage: Option<Usage> = None;
-
+    
         let s = try_stream! {
             while let Some(event) = stream.next().await {
                 let chunk = event.map_err(map_oai_err)?;
                 provider_meta = serde_json::to_value(&chunk).unwrap_or(serde_json::Value::Null);
-
+    
                 if let Some(choice) = chunk.choices.get(0) {
                     let delta = &choice.delta;
-
+    
+                    // Handle regular content
                     if let Some(ct) = &delta.content {
                         full_text.push_str(ct);
                         yield AskChunk::Delta { text: ct.clone() };
                     }
-
+    
                     if let Some(tcs) = &delta.tool_calls {
                         for tc in tcs {
                             let id = tc.id.clone().unwrap_or_default();
                             let name = tc.function.as_ref().and_then(|f| f.name.clone());
                             let args_delta = tc.function.as_ref().and_then(|f| f.arguments.clone());
-                            yield AskChunk::ToolCallDelta { tool_call_id: id, name, args_delta };
+                            yield AskChunk::ToolCallDelta { 
+                                tool_call_id: id, 
+                                name, 
+                                args_delta 
+                            };
                         }
                     }
-
+    
                     if let Some(role) = &delta.role {
                         yield AskChunk::Role(role.to_string());
                     }
-
+    
                     if let Some(fr) = &choice.finish_reason {
                         finish_reason = Some(finish_reason_str(fr).to_string());
                     }
                 }
-
-
+    
                 if let Some(u) = &chunk.usage {
                     usage = Some(Usage {
                         prompt_tokens: Some(u.prompt_tokens as u32),
@@ -117,7 +119,7 @@ impl OpenAiApi {
                     });
                 }
             }
-
+    
             let resp = AskResponse {
                 text: full_text,
                 finish_reason: finish_reason.unwrap_or_else(|| "stop".to_string()),
@@ -127,7 +129,7 @@ impl OpenAiApi {
             };
             yield AskChunk::Complete(resp);
         };
-
+    
         Ok(s)
     }
 

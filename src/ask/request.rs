@@ -35,6 +35,9 @@ pub enum AskChunk {
     /// Token/text delta for chat.
     Delta { text: String },
 
+    /// NEW: Reasoning tokens (for models with extended thinking)
+    Reasoning { text: String },
+
     /// Tool call deltas are streamed; you must assemble them.
     ToolCallDelta {
         tool_call_id: String,
