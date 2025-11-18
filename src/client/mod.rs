@@ -73,11 +73,9 @@ impl Client {
     ) -> crate::error::Result<crate::response::CompletionResponse> {
         use anthropic_sdk::{Anthropic, MessageCreateBuilder};
         
-        // Create the Anthropic client
         let client = Anthropic::new(&config.api_key)
             .map_err(|e| crate::error::Error::AnthropicError(e.to_string()))?;
         
-        // Build the message request
         let mut builder = MessageCreateBuilder::new(&config.model, 
             request.options.as_ref().and_then(|o| o.max_tokens).unwrap_or(4096));
         
@@ -86,17 +84,69 @@ impl Client {
             builder = builder.system(&system_msg.content);
         }
         
-        // Add user/assistant messages
+        // Add user/assistant messages - need to handle tool results and tool uses
         for msg in request.messages.iter().filter(|m| !matches!(m.role, crate::message::Role::System)) {
             match msg.role {
                 crate::message::Role::User => {
-                    builder = builder.user(&*msg.content);
+                    // Check if this is a tool result message
+                    if let Some(tool_call_id) = &msg.tool_call_id {
+                        // This is a tool result - needs special handling
+                        // Anthropic expects tool_result content blocks
+                        builder = builder.user_with_content_blocks(vec![
+                            anthropic_sdk::ContentBlock::ToolResult {
+                                tool_use_id: tool_call_id.clone(),
+                                content: msg.content.clone(),
+                                is_error: None,
+                            }
+                        ]);
+                    } else {
+                        // Regular user message
+                        builder = builder.user(&msg.content);
+                    }
                 }
                 crate::message::Role::Assistant => {
-                    builder = builder.assistant(&*msg.content);
+                    // Check if this has tool uses
+                    if let Some(tool_uses) = &msg.tool_uses {
+                        // Assistant message with tool calls
+                        let mut content_blocks = Vec::new();
+                        
+                        // Add text content if present
+                        if !msg.content.is_empty() {
+                            content_blocks.push(anthropic_sdk::ContentBlock::Text {
+                                text: msg.content.clone(),
+                            });
+                        }
+                        
+                        // Add tool use blocks
+                        for tool_use in tool_uses {
+                            content_blocks.push(anthropic_sdk::ContentBlock::ToolUse {
+                                id: tool_use.id.clone(),
+                                name: tool_use.name.clone(),
+                                input: tool_use.input.clone(),
+                            });
+                        }
+                        
+                        builder = builder.assistant_with_content_blocks(content_blocks);
+                    } else {
+                        // Regular assistant message
+                        builder = builder.assistant(&msg.content);
+                    }
                 }
-                crate::message::Role::System => {} // Already handled
+                crate::message::Role::System => {}
             }
+        }
+        
+        // Add tools if present
+        if let Some(tools) = &request.tools {
+            let anthropic_tools: Vec<anthropic_sdk::Tool> = tools
+                .iter()
+                .map(|tool| anthropic_sdk::Tool {
+                    name: tool.name.clone(),
+                    description: tool.description.clone(),
+                    input_schema: tool.input_schema.clone(),
+                })
+                .collect();
+            builder = builder.tools(anthropic_tools);
         }
         
         // Apply options
@@ -109,29 +159,42 @@ impl Client {
             }
         }
         
-        // Make the API call
         let anthropic_response = client.messages()
             .create(builder.build())
             .await
             .map_err(|e| crate::error::Error::AnthropicError(e.to_string()))?;
         
-        // Extract text content from response
-        let content = anthropic_response.content
-            .iter()
-            .filter_map(|block| {
-                if let anthropic_sdk::ContentBlock::Text { text } = block {
-                    Some(text.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("");
+        // Extract text content AND tool uses from response
+        let mut content = String::new();
+        let mut tool_uses = Vec::new();
         
-        // Create our response
+        for block in &anthropic_response.content {
+            match block {
+                anthropic_sdk::ContentBlock::Text { text } => {
+                    content.push_str(text);
+                }
+                anthropic_sdk::ContentBlock::ToolUse { id, name, input } => {
+                    tool_uses.push(crate::ToolUse {
+                        id: id.clone(),
+                        name: name.clone(),
+                        input: input.clone(),
+                    });
+                }
+                _ => {}
+            }
+        }
+        
+        let tool_uses_opt = if !tool_uses.is_empty() {
+            Some(tool_uses.clone())
+        } else {
+            None
+        };
+        
         let message = crate::message::Message {
             role: crate::message::Role::Assistant,
             content,
+            tool_uses: tool_uses_opt.clone(),
+            tool_call_id: None,
         };
         
         let usage = crate::response::Usage {
@@ -144,6 +207,7 @@ impl Client {
             Some(anthropic_sdk::StopReason::EndTurn) => crate::response::FinishReason::Stop,
             Some(anthropic_sdk::StopReason::MaxTokens) => crate::response::FinishReason::Length,
             Some(anthropic_sdk::StopReason::StopSequence) => crate::response::FinishReason::Stop,
+            Some(anthropic_sdk::StopReason::ToolUse) => crate::response::FinishReason::ToolUse,
             _ => crate::response::FinishReason::Other,
         };
         
@@ -152,6 +216,7 @@ impl Client {
             usage,
             finish_reason,
             model: anthropic_response.model,
+            tool_uses: tool_uses_opt,
         })
     }
     
@@ -164,7 +229,8 @@ impl Client {
         use async_openai::types::{
             ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
             ChatCompletionRequestUserMessageArgs, ChatCompletionRequestAssistantMessageArgs,
-            CreateChatCompletionRequestArgs,
+            ChatCompletionRequestToolMessageArgs, ChatCompletionTool, ChatCompletionToolType,
+            FunctionObject, CreateChatCompletionRequestArgs,
         };
         
         // Convert our messages to OpenAI format
@@ -179,18 +245,46 @@ impl Client {
                     )
                 }
                 crate::message::Role::User => {
-                    ChatCompletionRequestMessage::User(
-                        ChatCompletionRequestUserMessageArgs::default()
-                            .content(msg.content.clone())
-                            .build()?
-                    )
+                    // Check if this is a tool result
+                    if let Some(tool_call_id) = &msg.tool_call_id {
+                        ChatCompletionRequestMessage::Tool(
+                            ChatCompletionRequestToolMessageArgs::default()
+                                .content(msg.content.clone())
+                                .tool_call_id(tool_call_id.clone())
+                                .build()?
+                        )
+                    } else {
+                        ChatCompletionRequestMessage::User(
+                            ChatCompletionRequestUserMessageArgs::default()
+                                .content(msg.content.clone())
+                                .build()?
+                        )
+                    }
                 }
                 crate::message::Role::Assistant => {
-                    ChatCompletionRequestMessage::Assistant(
-                        ChatCompletionRequestAssistantMessageArgs::default()
-                            .content(msg.content.clone())
-                            .build()?
-                    )
+                    let mut builder = ChatCompletionRequestAssistantMessageArgs::default();
+                    
+                    // Add content if present
+                    if !msg.content.is_empty() {
+                        builder.content(msg.content.clone());
+                    }
+                    
+                    // Add tool calls if present
+                    if let Some(tool_uses) = &msg.tool_uses {
+                        let tool_calls: Vec<_> = tool_uses.iter().map(|tu| {
+                            async_openai::types::ChatCompletionMessageToolCall {
+                                id: tu.id.clone(),
+                                r#type: async_openai::types::ChatCompletionToolType::Function,
+                                function: async_openai::types::FunctionCall {
+                                    name: tu.name.clone(),
+                                    arguments: tu.input.to_string(),
+                                },
+                            }
+                        }).collect();
+                        builder.tool_calls(tool_calls);
+                    }
+                    
+                    ChatCompletionRequestMessage::Assistant(builder.build()?)
                 }
             };
             messages.push(openai_msg);
@@ -199,6 +293,23 @@ impl Client {
         // Build the request
         let mut request_builder = CreateChatCompletionRequestArgs::default();
         request_builder.model(&config.model).messages(messages);
+        
+        // Add tools if present
+        if let Some(tools) = &request.tools {
+            let openai_tools: Vec<ChatCompletionTool> = tools
+                .iter()
+                .map(|tool| ChatCompletionTool {
+                    r#type: ChatCompletionToolType::Function,
+                    function: FunctionObject {
+                        name: tool.name.clone(),
+                        description: Some(tool.description.clone()),
+                        parameters: Some(tool.input_schema.clone()),
+                        strict: None,
+                    },
+                })
+                .collect();
+            request_builder.tools(openai_tools);
+        }
         
         // Apply options if provided
         if let Some(opts) = &request.options {
@@ -216,27 +327,35 @@ impl Client {
             }
         }
         
-        let openai_request = request_builder
-            .build()?;
+        let openai_request = request_builder.build()?;
         
-        // Make the API call
         let response = sdk_client
             .chat()
             .create(openai_request)
             .await?;
         
-        // Convert response back to our format
         let choice = response
             .choices
             .first()
             .ok_or_else(|| crate::error::Error::Other("No response from OpenAI".into()))?;
         
+        // Extract tool calls if present
+        let tool_uses_opt = choice.message.tool_calls.as_ref().map(|calls| {
+            calls.iter().map(|call| crate::ToolUse {
+                id: call.id.clone(),
+                name: call.function.name.clone(),
+                input: serde_json::from_str(&call.function.arguments)
+                    .unwrap_or_else(|_| serde_json::Value::String(call.function.arguments.clone())),
+            }).collect()
+        });
+        
         let message = crate::message::Message {
             role: crate::message::Role::Assistant,
             content: choice.message.content.clone().unwrap_or_default(),
+            tool_uses: tool_uses_opt.clone(),
+            tool_call_id: None,
         };
         
-        // Handle optional usage
         let usage = if let Some(usage) = &response.usage {
             crate::response::Usage {
                 prompt_tokens: usage.prompt_tokens,
@@ -255,6 +374,8 @@ impl Client {
             Some(async_openai::types::FinishReason::Stop) => crate::response::FinishReason::Stop,
             Some(async_openai::types::FinishReason::Length) => crate::response::FinishReason::Length,
             Some(async_openai::types::FinishReason::ContentFilter) => crate::response::FinishReason::ContentFilter,
+            Some(async_openai::types::FinishReason::ToolCalls) => crate::response::FinishReason::ToolUse,
+            Some(async_openai::types::FinishReason::FunctionCall) => crate::response::FinishReason::ToolUse,
             _ => crate::response::FinishReason::Other,
         };
         
@@ -263,6 +384,7 @@ impl Client {
             usage,
             finish_reason,
             model: response.model,
+            tool_uses: tool_uses_opt,
         })
     }
 

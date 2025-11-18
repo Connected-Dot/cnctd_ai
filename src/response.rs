@@ -16,6 +16,10 @@ impl CompletionResponse {
     pub fn text(&self) -> &str {
         &self.message.content
     }
+
+    pub fn tool_use(&self) -> Option<&ToolUse> {
+        self.tool_uses.as_ref()?.first()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
