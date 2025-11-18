@@ -21,10 +21,10 @@ impl StreamChunk {
 pub struct CompletionStream {
     inner: StreamType,
     model: String,
-    // Accumulate response data as we stream
     accumulated_text: String,
     usage: Option<crate::response::Usage>,
     finish_reason: Option<crate::response::FinishReason>,
+    tool_uses: Vec<crate::tool::ToolUse>,  
 }
 
 impl CompletionStream {
@@ -43,6 +43,7 @@ impl CompletionStream {
             accumulated_text: String::new(),
             usage: None,
             finish_reason: None,
+            tool_uses: Vec::new(),
         }
     }
 
@@ -56,6 +57,7 @@ impl CompletionStream {
             accumulated_text: String::new(),
             usage: None,
             finish_reason: None,
+            tool_uses: Vec::new(),
         }
     }
 
@@ -132,7 +134,9 @@ impl CompletionStream {
             self.finish_reason = Some(match finish_reason {
                 async_openai::types::FinishReason::Stop => crate::response::FinishReason::Stop,
                 async_openai::types::FinishReason::Length => crate::response::FinishReason::Length,
-                _ => crate::response::FinishReason::Other,
+                async_openai::types::FinishReason::ToolCalls => crate::response::FinishReason::ToolUse,
+                async_openai::types::FinishReason::ContentFilter => crate::response::FinishReason::ContentFilter,
+                async_openai::types::FinishReason::FunctionCall => crate::response::FinishReason::ToolUse,
             });
         }
 
@@ -245,6 +249,10 @@ impl CompletionStream {
             finish_reason: self.finish_reason.clone().unwrap_or(crate::response::FinishReason::Other),
             model: self.model.clone(),
         })
+    }
+
+        pub fn tool_use(&self) -> Option<&crate::tool::ToolUse> {
+        self.tool_uses.first()
     }
 }
 

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::message::Message;
+use crate::{ToolUse, message::Message};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompletionResponse {
@@ -7,6 +7,8 @@ pub struct CompletionResponse {
     pub usage: Usage,
     pub finish_reason: FinishReason,
     pub model: String,
+    #[serde(skip)]
+    pub(crate) tool_uses: Option<Vec<ToolUse>>,
 }
 
 impl CompletionResponse {
@@ -29,6 +31,7 @@ pub enum FinishReason {
     Stop,
     Length,
     ContentFilter,
+    ToolUse,
     #[serde(other)]
     Other,
 }

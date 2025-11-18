@@ -1,6 +1,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ToolUse;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
@@ -17,6 +19,8 @@ impl Message {
         Self {
             role: Role::User,
             content: content.into(),
+            tool_uses: None,
+            tool_call_id: None,
         }
     }
     
@@ -24,6 +28,8 @@ impl Message {
         Self {
             role: Role::Assistant,
             content: content.into(),
+            tool_uses: None,
+            tool_call_id: None,
         }
     }
     
@@ -31,6 +37,27 @@ impl Message {
         Self {
             role: Role::System,
             content: content.into(),
+            tool_uses: None,
+            tool_call_id: None,
+        }
+    }
+    
+    // New helper methods from your example:
+    pub fn assistant_with_tool_use(tool_use: ToolUse) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_uses: Some(vec![tool_use]),
+            tool_call_id: None,
+        }
+    }
+    
+    pub fn tool_result(tool_call_id: String, content: impl Into<String>) -> Self {
+        Self {
+            role: Role::User,  // Note: tool results typically have User role
+            content: content.into(),
+            tool_uses: None,
+            tool_call_id: Some(tool_call_id),
         }
     }
 }
