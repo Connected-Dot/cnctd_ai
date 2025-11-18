@@ -14,7 +14,7 @@ async fn main() -> Result<()> {
 }
 
 async fn test_anthropic_tools() -> Result<()> {
-    use cnctd_ai::{Client, AnthropicConfig, Message, CompletionRequest, Tool, ToolDefinition};
+    use cnctd_ai::{Client, AnthropicConfig, Message, CompletionRequest, Tool};
     
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
     
@@ -54,6 +54,7 @@ async fn test_anthropic_tools() -> Result<()> {
     
     let mut request = CompletionRequest {
         messages: messages.clone(),
+        tools: None,  // Initialize tools field
         options: None,
     };
     request.add_tool(weather_tool.clone());
@@ -86,6 +87,7 @@ async fn test_anthropic_tools() -> Result<()> {
         // Get final response
         let request = CompletionRequest {
             messages: messages.clone(),
+            tools: None,
             options: None,
         };
         
@@ -137,6 +139,7 @@ async fn test_openai_tools() -> Result<()> {
     
     let mut request = CompletionRequest {
         messages: messages.clone(),
+        tools: None,  // Initialize tools field
         options: None,
     };
     request.add_tool(weather_tool.clone());
@@ -168,6 +171,7 @@ async fn test_openai_tools() -> Result<()> {
         // Get final response
         let request = CompletionRequest {
             messages: messages.clone(),
+            tools: None,
             options: None,
         };
         
