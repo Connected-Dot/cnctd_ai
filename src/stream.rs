@@ -80,6 +80,20 @@ impl CompletionStream {
                     eprintln!("DEBUG: Processing OpenAI stream chunk");
                     match stream.next().await {
                         Some(Ok(response)) => {
+                            let mut has_usage_update = false;
+                            
+                            // Update usage if present (check this first, before choices)
+                            // OpenAI sends usage in a separate chunk at the end
+                            if let Some(usage) = &response.usage {
+                                eprintln!("DEBUG: Received usage data: {:?}", usage);
+                                self.usage = Some(crate::response::Usage {
+                                    prompt_tokens: usage.prompt_tokens,
+                                    completion_tokens: usage.completion_tokens,
+                                    total_tokens: usage.total_tokens,
+                                });
+                                has_usage_update = true;
+                            }
+                            
                             if let Some(choice) = response.choices.get(0) {
                                 // Handle tool calls
                                 if let Some(tool_calls) = &choice.delta.tool_calls {
@@ -134,29 +148,17 @@ impl CompletionStream {
                                         async_openai::types::FinishReason::FunctionCall => crate::response::FinishReason::ToolUse,
                                     });
                                 }
-                                
-                                // Update usage if present
-                                if let Some(usage) = &response.usage {
-                                    eprintln!("DEBUG: Received usage data: {:?}", usage);
-                                    self.usage = Some(crate::response::Usage {
-                                        prompt_tokens: usage.prompt_tokens,
-                                        completion_tokens: usage.completion_tokens,
-                                        total_tokens: usage.total_tokens,
-                                    });
-                                }
-
-                                // If we have finish reason, tool uses, or just got usage, return a chunk
-                                if self.finish_reason.is_some() || !self.tool_uses.is_empty() {
-                                    return Some(Ok(StreamChunk {
-                                        delta: None,
-                                        finish_reason: self.finish_reason.clone(),
-                                    }));
-                                }
-
-                                // Continue to next chunk if nothing to return
-                                continue;
                             }
-                            
+
+                            // If we have something to report (finish reason, tool uses, or usage),
+                            // return a chunk. Otherwise continue to next chunk.
+                            if self.finish_reason.is_some() || !self.tool_uses.is_empty() || has_usage_update {
+                                return Some(Ok(StreamChunk {
+                                    delta: None,
+                                    finish_reason: self.finish_reason.clone(),
+                                }));
+                            }
+
                             // Continue to next chunk if nothing to return
                             continue;
                         }
