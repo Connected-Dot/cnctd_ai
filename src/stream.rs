@@ -46,6 +46,19 @@ impl CompletionStream {
         }
     }
 
+    pub fn openai(
+        stream: async_openai::types::ChatCompletionResponseStream,
+        model: String,
+    ) -> Self {
+        Self {
+            inner: StreamType::OpenAi(stream),
+            model,
+            accumulated_text: String::new(),
+            usage: None,
+            finish_reason: None,
+        }
+    }
+
     /// Get the next chunk from the stream
     pub async fn next(&mut self) -> Option<Result<StreamChunk, crate::error::Error>> {
         loop {
@@ -61,13 +74,86 @@ impl CompletionStream {
                         None => return None,
                     }
                 }
+                StreamType::OpenAi(stream) => {
+                    match stream.next().await {
+                        Some(Ok(response)) => {
+                            // Process OpenAI streaming response here if needed
+                            // For now, just return the text chunk
+                            let content = response.choices.get(0).and_then(|c| c.delta.content.clone());
+                            if let Some(text) = content {
+                                self.accumulated_text.push_str(&text);
+                                return Some(Ok(StreamChunk {
+                                    delta: Some(text),
+                                    finish_reason: None,
+                                }));
+                            } else {
+                                continue;
+                            }
+                        }
+                        Some(Err(e)) => {
+                            return Some(Err(crate::error::Error::Other(
+                                format!("Stream error: {}", e)
+                            )));
+                        }
+                        None => return None,
+                    }
+                }
             };
-
             // Parse the SSE event
             if let Some(chunk) = self.handle_anthropic_sse_event(event).await? {
                 return Some(Ok(chunk));
             }
             // If no chunk returned, continue to next event
+        }
+        
+    }
+
+    async fn handle_openai_chunk(
+        &mut self,
+        response: async_openai::types::CreateChatCompletionStreamResponse,
+    ) -> Option<Result<StreamChunk, crate::error::Error>> {
+        use async_openai::types::ChatCompletionStreamResponseDelta;
+
+        // Get the first choice (OpenAI can return multiple choices but we'll use the first)
+        let choice = response.choices.first()?;
+
+        // Extract text delta
+        let delta = &choice.delta;
+        let text_delta = match delta {
+            ChatCompletionStreamResponseDelta { content: Some(content), .. } => {
+                self.accumulated_text.push_str(content);
+                Some(content.clone())
+            }
+            _ => None,
+        };
+
+        // Update finish reason if present
+        if let Some(finish_reason) = &choice.finish_reason {
+            self.finish_reason = Some(match finish_reason {
+                async_openai::types::FinishReason::Stop => crate::response::FinishReason::Stop,
+                async_openai::types::FinishReason::Length => crate::response::FinishReason::Length,
+                _ => crate::response::FinishReason::Other,
+            });
+        }
+
+        // Update usage if present (typically only in the last chunk)
+        if let Some(usage) = &response.usage {
+            self.usage = Some(crate::response::Usage {
+                prompt_tokens: usage.prompt_tokens,
+                completion_tokens: usage.completion_tokens,
+                total_tokens: usage.total_tokens,
+            });
+        }
+
+        // Return chunk if we have text, otherwise get next chunk
+        if text_delta.is_some() || self.finish_reason.is_some() {
+            Some(Ok(StreamChunk {
+                delta: text_delta,
+                finish_reason: self.finish_reason.clone(),
+            }))
+        } else {
+            // No content yet, continue to next chunk
+            Box::pin(self.next()).await
         }
     }
 
@@ -171,4 +257,5 @@ enum StreamType {
             >
         >
     ),
+    OpenAi(async_openai::types::ChatCompletionResponseStream),
 }

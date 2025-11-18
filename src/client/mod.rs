@@ -275,8 +275,7 @@ impl Client {
                 self.stream_anthropic(config, &request).await
             }
             ProviderType::OpenAi { sdk_client, config } => {
-                // self.stream_openai(sdk_client, config, &request).await
-                todo!("OpenAI streaming not yet implemented")
+                self.stream_openai(sdk_client, config, &request).await
             }
         }
     }
@@ -378,6 +377,81 @@ impl Client {
         let stream = response.bytes_stream();
         
         Ok(crate::stream::CompletionStream::anthropic_custom(stream, config.model.clone()))
+    }
+
+    async fn stream_openai(
+        &self,
+        sdk_client: &async_openai::Client<async_openai::config::OpenAIConfig>,
+        config: &OpenAiConfig,
+        request: &crate::request::CompletionRequest,
+    ) -> crate::error::Result<crate::stream::CompletionStream> {
+        use async_openai::types::{
+            ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
+            ChatCompletionRequestUserMessageArgs, ChatCompletionRequestAssistantMessageArgs,
+            CreateChatCompletionRequestArgs,
+        };
+        
+        // Convert our messages to OpenAI format (same as complete_openai)
+        let mut messages = Vec::new();
+        for msg in &request.messages {
+            let openai_msg = match msg.role {
+                crate::message::Role::System => {
+                    ChatCompletionRequestMessage::System(
+                        ChatCompletionRequestSystemMessageArgs::default()
+                            .content(msg.content.clone())
+                            .build()?
+                    )
+                }
+                crate::message::Role::User => {
+                    ChatCompletionRequestMessage::User(
+                        ChatCompletionRequestUserMessageArgs::default()
+                            .content(msg.content.clone())
+                            .build()?
+                    )
+                }
+                crate::message::Role::Assistant => {
+                    ChatCompletionRequestMessage::Assistant(
+                        ChatCompletionRequestAssistantMessageArgs::default()
+                            .content(msg.content.clone())
+                            .build()?
+                    )
+                }
+            };
+            messages.push(openai_msg);
+        }
+        
+        // Build the request
+        let mut request_builder = CreateChatCompletionRequestArgs::default();
+        request_builder
+            .model(&config.model)
+            .messages(messages)
+            .stream(true); // Enable streaming!
+        
+        // Apply options if provided
+        if let Some(opts) = &request.options {
+            if let Some(temp) = opts.temperature {
+                request_builder.temperature(temp);
+            }
+            if let Some(max_tokens) = opts.max_tokens {
+                request_builder.max_tokens(max_tokens);
+            }
+            if let Some(top_p) = opts.top_p {
+                request_builder.top_p(top_p);
+            }
+            if let Some(stop) = &opts.stop_sequences {
+                request_builder.stop(stop.clone());
+            }
+        }
+        
+        let openai_request = request_builder.build()?;
+        
+        // Make the streaming API call
+        let stream = sdk_client
+            .chat()
+            .create_stream(openai_request)
+            .await?;
+        
+        Ok(crate::stream::CompletionStream::openai(stream, config.model.clone()))
     }
 }
 
