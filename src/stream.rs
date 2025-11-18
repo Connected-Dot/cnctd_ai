@@ -136,6 +136,7 @@ impl CompletionStream {
                                 
                                 // Update usage if present
                                 if let Some(usage) = &response.usage {
+                                    eprintln!("DEBUG: Received usage data: {:?}", usage);
                                     self.usage = Some(crate::response::Usage {
                                         prompt_tokens: usage.prompt_tokens,
                                         completion_tokens: usage.completion_tokens,
