@@ -371,6 +371,10 @@ impl CompletionStream {
             tool_uses: tool_uses_opt,
         })
     }
+
+    pub fn tool_use(&self) -> Option<&crate::tool::ToolUse> {
+        self.tool_uses.first()
+    }
 }
 
 enum StreamType {

@@ -95,9 +95,10 @@ impl Client {
                             ContentBlockParam::ToolResult {
                                 tool_use_id: tool_call_id.clone(),
                                 content: Some(msg.content.clone()),
-                                is_error: None,
+                                is_error: Some(false),  // <-- Change None to Some(false)
                             }
                         ]));
+
                     } else {
                         // Regular user message
                         builder = builder.user(MessageContent::Text(msg.content.clone()));
