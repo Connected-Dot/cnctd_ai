@@ -28,6 +28,7 @@ async fn test_anthropic() -> Result<()> {
     
     let request = CompletionRequest {
         messages: vec![Message::user("What is Rust?")],
+        tools: None,
         options: None,
     };
     
@@ -61,6 +62,7 @@ async fn test_openai() -> Result<()> {
     
     let request = CompletionRequest {
         messages: vec![Message::user("What is Rust?")],
+        tools: None,
         options: None,
     };
     

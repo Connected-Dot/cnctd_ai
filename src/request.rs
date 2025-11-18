@@ -4,6 +4,7 @@ use crate::message::Message;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompletionRequest {
     pub messages: Vec<Message>,
+    pub tools: Option<Vec<Tool>>,
     pub options: Option<RequestOptions>,
 }
 

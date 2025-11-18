@@ -36,6 +36,7 @@ async fn test_anthropic_conversation() -> Result<()> {
     
     let request = CompletionRequest {
         messages: messages.clone(),
+        tools: None,
         options: None,
     };
     
@@ -52,6 +53,7 @@ async fn test_anthropic_conversation() -> Result<()> {
     
     let request = CompletionRequest {
         messages: messages.clone(),
+        tools: None,
         options: None,
     };
     
@@ -68,6 +70,7 @@ async fn test_anthropic_conversation() -> Result<()> {
     
     let request = CompletionRequest {
         messages: messages.clone(),
+        tools: None,
         options: None,
     };
     
@@ -103,6 +106,7 @@ async fn test_openai_conversation() -> Result<()> {
     
     let request = CompletionRequest {
         messages: messages.clone(),
+        tools: None,
         options: None,
     };
     
@@ -119,6 +123,7 @@ async fn test_openai_conversation() -> Result<()> {
     
     let request = CompletionRequest {
         messages: messages.clone(),
+        tools: None,
         options: None,
     };
     
@@ -135,6 +140,7 @@ async fn test_openai_conversation() -> Result<()> {
     
     let request = CompletionRequest {
         messages: messages.clone(),
+        tools: None,
         options: None,
     };
     

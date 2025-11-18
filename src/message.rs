@@ -5,6 +5,11 @@ use serde::{Deserialize, Serialize};
 pub struct Message {
     pub role: Role,
     pub content: String,
+    // Internal fields for tool tracking
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tool_uses: Option<Vec<ToolUse>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tool_call_id: Option<String>,
 }
 
 impl Message {

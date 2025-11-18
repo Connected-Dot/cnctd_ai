@@ -30,6 +30,7 @@ async fn test_anthropic_streaming() -> Result<()> {
         messages: vec![
             Message::user("Explain AI streaming in one sentence.")
         ],
+        tools: None,
         options: None,
     };
 
@@ -79,6 +80,7 @@ async fn test_openai_streaming() -> Result<()> {
         messages: vec![
             Message::user("Explain AI streaming in one sentence.")
         ],
+        tools: None,
         options: None,
     };
 
