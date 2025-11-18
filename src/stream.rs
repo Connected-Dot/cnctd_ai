@@ -142,14 +142,17 @@ impl CompletionStream {
                                         total_tokens: usage.total_tokens,
                                     });
                                 }
-                                
-                                // If we have finish reason or tool uses but no text, still return a chunk
+
+                                // If we have finish reason, tool uses, or just got usage, return a chunk
                                 if self.finish_reason.is_some() || !self.tool_uses.is_empty() {
                                     return Some(Ok(StreamChunk {
                                         delta: None,
                                         finish_reason: self.finish_reason.clone(),
                                     }));
                                 }
+
+                                // Continue to next chunk if nothing to return
+                                continue;
                             }
                             
                             // Continue to next chunk if nothing to return
