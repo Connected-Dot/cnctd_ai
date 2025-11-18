@@ -77,6 +77,7 @@ impl CompletionStream {
                     }
                 }
                 StreamType::OpenAi(stream) => {
+                    eprintln!("DEBUG: Processing OpenAI stream chunk");
                     match stream.next().await {
                         Some(Ok(response)) => {
                             if let Some(choice) = response.choices.get(0) {

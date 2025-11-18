@@ -683,7 +683,7 @@ impl Client {
                 request_builder.stop(stop.clone());
             }
         }
-        
+        eprintln!("DEBUG: Building OpenAI streaming request with stream_options"); 
         let openai_request = request_builder.build()?;
         
         // Make the streaming API call
