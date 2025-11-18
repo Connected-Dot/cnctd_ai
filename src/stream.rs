@@ -77,7 +77,6 @@ impl CompletionStream {
                     }
                 }
                 StreamType::OpenAi(stream) => {
-                    eprintln!("DEBUG: Processing OpenAI stream chunk");
                     match stream.next().await {
                         Some(Ok(response)) => {
                             let mut has_usage_update = false;
@@ -85,7 +84,6 @@ impl CompletionStream {
                             // Update usage if present (check this first, before choices)
                             // OpenAI sends usage in a separate chunk at the end
                             if let Some(usage) = &response.usage {
-                                eprintln!("DEBUG: Received usage data: {:?}", usage);
                                 self.usage = Some(crate::response::Usage {
                                     prompt_tokens: usage.prompt_tokens,
                                     completion_tokens: usage.completion_tokens,
