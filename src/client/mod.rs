@@ -265,6 +265,120 @@ impl Client {
             model: response.model,
         })
     }
+
+    pub async fn complete_stream(
+        &self,
+        request: crate::request::CompletionRequest,
+    ) -> crate::error::Result<crate::stream::CompletionStream> {
+        match &self.provider {
+            ProviderType::Anthropic { config } => {
+                self.stream_anthropic(config, &request).await
+            }
+            ProviderType::OpenAi { sdk_client, config } => {
+                // self.stream_openai(sdk_client, config, &request).await
+                todo!("OpenAI streaming not yet implemented")
+            }
+        }
+    }
+
+    async fn stream_anthropic(
+        &self,
+        config: &AnthropicConfig,
+        request: &crate::request::CompletionRequest,
+    ) -> crate::error::Result<crate::stream::CompletionStream> {
+        // ============================================================================
+        // TEMPORARY WORKAROUND: Custom streaming implementation
+        // ============================================================================
+        // The anthropic-sdk-rust (v0.1.1) has a bug where create_stream() uses
+        // Bearer token authentication instead of x-api-key header, causing 401 errors.
+        // 
+        // Issue: https://github.com/dimichgh/anthropic-sdk-rust/issues/2
+        // Created: Sept 11, 2025
+        //
+        // TODO: Once the upstream bug is fixed and a new version is released:
+        //   1. Remove this custom implementation
+        //   2. Restore the original SDK-based streaming (see git history)
+        //   3. Update anthropic-sdk-rust dependency version
+        //   4. Test streaming works with SDK's create_stream() method
+        // ============================================================================
+        
+        use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+        
+        // Build the request body manually
+        let mut body = serde_json::json!({
+            "model": config.model,
+            "max_tokens": request.options.as_ref().and_then(|o| o.max_tokens).unwrap_or(4096),
+            "messages": [],
+            "stream": true,
+        });
+        
+        // Add system message if present
+        if let Some(system_msg) = request.messages.iter().find(|m| matches!(m.role, crate::message::Role::System)) {
+            body["system"] = serde_json::json!(system_msg.content);
+        }
+        
+        // Add user/assistant messages
+        let mut messages = Vec::new();
+        for msg in request.messages.iter().filter(|m| !matches!(m.role, crate::message::Role::System)) {
+            let role = match msg.role {
+                crate::message::Role::User => "user",
+                crate::message::Role::Assistant => "assistant",
+                crate::message::Role::System => continue,
+            };
+            messages.push(serde_json::json!({
+                "role": role,
+                "content": msg.content,
+            }));
+        }
+        body["messages"] = serde_json::json!(messages);
+        
+        // Apply options
+        if let Some(opts) = &request.options {
+            if let Some(temp) = opts.temperature {
+                body["temperature"] = serde_json::json!(temp);
+            }
+            if let Some(top_p) = opts.top_p {
+                body["top_p"] = serde_json::json!(top_p);
+            }
+        }
+        
+        // Build headers with correct x-api-key authentication
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(
+            "x-api-key",
+            HeaderValue::from_str(&config.api_key)
+                .map_err(|e| crate::error::Error::Other(format!("Invalid API key: {}", e)))?
+        );
+        headers.insert(
+            "anthropic-version",
+            HeaderValue::from_static("2023-06-01")
+        );
+        
+        // Make the HTTP request
+        let client = reqwest::Client::new();
+        let response = client
+            .post("https://api.anthropic.com/v1/messages")
+            .headers(headers)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::Other(format!("HTTP request failed: {}", e)))?;
+        
+        // Check for HTTP errors
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(crate::error::Error::AnthropicError(
+                format!("HTTP {}: {}", status, error_text)
+            ));
+        }
+        
+        // Convert response to SSE stream
+        let stream = response.bytes_stream();
+        
+        Ok(crate::stream::CompletionStream::anthropic_custom(stream, config.model.clone()))
+    }
 }
 
 #[derive(Clone)]
