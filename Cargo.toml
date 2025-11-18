@@ -21,9 +21,9 @@ rmcp = { version = "0.9.0", features = [
   "transport-child-process"
 ] }
 reqwest = "0.12.24"
-anthropic-sdk = "0.1.5"
 async-openai = "0.30.1"
 dotenvy = "0.15.7"
+anthropic-sdk-rust = "0.1.1"
 
 [dev-dependencies]
 tokio = { version = "1.48.0", features = ["full"] }

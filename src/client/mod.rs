@@ -71,101 +71,87 @@ impl Client {
         config: &AnthropicConfig,
         request: &crate::request::CompletionRequest,
     ) -> crate::error::Result<crate::response::CompletionResponse> {
-        use anthropic_sdk::Client as AnthropicClient;
-        use serde_json::json;
+        use anthropic_sdk::{Anthropic, MessageCreateBuilder};
         
-        // Separate system messages from user/assistant messages
-        let system_message = request.messages
-            .iter()
-            .find(|m| matches!(m.role, crate::message::Role::System))
-            .map(|m| m.content.clone());
-        
-        // Convert user/assistant messages to Anthropic format
-        let messages: Vec<serde_json::Value> = request.messages
-            .iter()
-            .filter(|m| !matches!(m.role, crate::message::Role::System))
-            .map(|msg| {
-                let role = match msg.role {
-                    crate::message::Role::User => "user",
-                    crate::message::Role::Assistant => "assistant",
-                    crate::message::Role::System => "user", // shouldn't hit this due to filter
-                };
-                json!({
-                    "role": role,
-                    "content": msg.content
-                })
-            })
-            .collect();
-        
-        // Build the request using Anthropic's builder
-        let mut client_builder = AnthropicClient::new()
-            .auth(&config.api_key)
-            .model(&config.model)
-            .messages(&json!(messages));
-        
-        // Add system message if present
-        if let Some(system) = system_message {
-            client_builder = client_builder.system(&system);
-        }
-        
-        // Apply options - must set max_tokens (required by Anthropic)
-        let max_tokens = request.options
-            .as_ref()
-            .and_then(|o| o.max_tokens)
-            .unwrap_or(4096);
-        client_builder = client_builder.max_tokens(max_tokens as i32);
-        
-        if let Some(opts) = &request.options {
-            if let Some(temp) = opts.temperature {
-                client_builder = client_builder.temperature(temp);
-            }
-            if let Some(top_p) = opts.top_p {
-                client_builder = client_builder.top_p(top_p.into());
-            }
-        }
-        
-        // Set version if provided
-        if let Some(version) = &config.version {
-            client_builder = client_builder.version(version);
-        } else {
-            client_builder = client_builder.version("2023-06-01");
-        }
-        
-        let anthropic_request = client_builder
-            .build()
+        // Create the Anthropic client
+        let client = Anthropic::new(&config.api_key)
             .map_err(|e| crate::error::Error::AnthropicError(e.to_string()))?;
         
-        // Collect response chunks
-        let response_text = std::sync::Arc::new(tokio::sync::Mutex::new(String::new()));
-        let response_text_clone = response_text.clone();
+        // Build the message request
+        let mut builder = MessageCreateBuilder::new(&config.model, 
+            request.options.as_ref().and_then(|o| o.max_tokens).unwrap_or(4096));
         
-        anthropic_request
-            .execute(move |chunk| {
-                let text = response_text_clone.clone();
-                async move {
-                    text.lock().await.push_str(&chunk);
+        // Add system message if present
+        if let Some(system_msg) = request.messages.iter().find(|m| matches!(m.role, crate::message::Role::System)) {
+            builder = builder.system(&system_msg.content);
+        }
+        
+        // Add user/assistant messages
+        for msg in request.messages.iter().filter(|m| !matches!(m.role, crate::message::Role::System)) {
+            match msg.role {
+                crate::message::Role::User => {
+                    builder = builder.user(&*msg.content);
                 }
-            })
+                crate::message::Role::Assistant => {
+                    builder = builder.assistant(&*msg.content);
+                }
+                crate::message::Role::System => {} // Already handled
+            }
+        }
+        
+        // Apply options
+        if let Some(opts) = &request.options {
+            if let Some(temp) = opts.temperature {
+                builder = builder.temperature(temp);
+            }
+            if let Some(top_p) = opts.top_p {
+                builder = builder.top_p(top_p);
+            }
+        }
+        
+        // Make the API call
+        let anthropic_response = client.messages()
+            .create(builder.build())
             .await
             .map_err(|e| crate::error::Error::AnthropicError(e.to_string()))?;
         
-        let final_text = response_text.lock().await.clone();
+        // Extract text content from response
+        let content = anthropic_response.content
+            .iter()
+            .filter_map(|block| {
+                if let anthropic_sdk::ContentBlock::Text { text } = block {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("");
         
-        // Create response
+        // Create our response
         let message = crate::message::Message {
             role: crate::message::Role::Assistant,
-            content: final_text,
+            content,
+        };
+        
+        let usage = crate::response::Usage {
+            prompt_tokens: anthropic_response.usage.input_tokens,
+            completion_tokens: anthropic_response.usage.output_tokens,
+            total_tokens: anthropic_response.usage.input_tokens + anthropic_response.usage.output_tokens,
+        };
+        
+        let finish_reason = match anthropic_response.stop_reason {
+            Some(anthropic_sdk::StopReason::EndTurn) => crate::response::FinishReason::Stop,
+            Some(anthropic_sdk::StopReason::MaxTokens) => crate::response::FinishReason::Length,
+            Some(anthropic_sdk::StopReason::StopSequence) => crate::response::FinishReason::Stop,
+            _ => crate::response::FinishReason::Other,
         };
         
         Ok(crate::response::CompletionResponse {
             message,
-            usage: crate::response::Usage {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-                total_tokens: 0,
-            },
-            finish_reason: crate::response::FinishReason::Stop,
-            model: config.model.clone(),
+            usage,
+            finish_reason,
+            model: anthropic_response.model,
         })
     }
     
