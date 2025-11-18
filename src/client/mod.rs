@@ -580,10 +580,11 @@ impl Client {
         use async_openai::types::{
             ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
             ChatCompletionRequestUserMessageArgs, ChatCompletionRequestAssistantMessageArgs,
-            CreateChatCompletionRequestArgs,
+            ChatCompletionRequestToolMessageArgs, ChatCompletionTool, ChatCompletionToolType,
+            FunctionObject, CreateChatCompletionRequestArgs, ChatCompletionStreamOptions,
         };
         
-        // Convert our messages to OpenAI format (same as complete_openai)
+        // Convert our messages to OpenAI format - handle tool results and tool uses
         let mut messages = Vec::new();
         for msg in &request.messages {
             let openai_msg = match msg.role {
@@ -595,18 +596,46 @@ impl Client {
                     )
                 }
                 crate::message::Role::User => {
-                    ChatCompletionRequestMessage::User(
-                        ChatCompletionRequestUserMessageArgs::default()
-                            .content(msg.content.clone())
-                            .build()?
-                    )
+                    // Check if this is a tool result
+                    if let Some(tool_call_id) = &msg.tool_call_id {
+                        ChatCompletionRequestMessage::Tool(
+                            ChatCompletionRequestToolMessageArgs::default()
+                                .content(msg.content.clone())
+                                .tool_call_id(tool_call_id.clone())
+                                .build()?
+                        )
+                    } else {
+                        ChatCompletionRequestMessage::User(
+                            ChatCompletionRequestUserMessageArgs::default()
+                                .content(msg.content.clone())
+                                .build()?
+                        )
+                    }
                 }
                 crate::message::Role::Assistant => {
-                    ChatCompletionRequestMessage::Assistant(
-                        ChatCompletionRequestAssistantMessageArgs::default()
-                            .content(msg.content.clone())
-                            .build()?
-                    )
+                    let mut builder = ChatCompletionRequestAssistantMessageArgs::default();
+                    
+                    // Add content if present
+                    if !msg.content.is_empty() {
+                        builder.content(msg.content.clone());
+                    }
+                    
+                    // Add tool calls if present
+                    if let Some(tool_uses) = &msg.tool_uses {
+                        let tool_calls: Vec<_> = tool_uses.iter().map(|tu| {
+                            async_openai::types::ChatCompletionMessageToolCall {
+                                id: tu.id.clone(),
+                                r#type: async_openai::types::ChatCompletionToolType::Function,
+                                function: async_openai::types::FunctionCall {
+                                    name: tu.name.clone(),
+                                    arguments: tu.input.to_string(),
+                                },
+                            }
+                        }).collect();
+                        builder.tool_calls(tool_calls);
+                    }
+                    
+                    ChatCompletionRequestMessage::Assistant(builder.build()?)
                 }
             };
             messages.push(openai_msg);
@@ -617,12 +646,13 @@ impl Client {
         request_builder
             .model(&config.model)
             .messages(messages)
-            .stream(true); // Enable streaming!
+            .stream(true)
+            .stream_options(ChatCompletionStreamOptions {
+                include_usage: true,
+            });
 
-        // ADD THIS: Add tools if present
+        // Add tools if present
         if let Some(tools) = &request.tools {
-            use async_openai::types::{ChatCompletionTool, ChatCompletionToolType, FunctionObject};
-            
             let openai_tools: Vec<ChatCompletionTool> = tools
                 .iter()
                 .map(|tool| ChatCompletionTool {
