@@ -445,22 +445,73 @@ impl Client {
             body["system"] = serde_json::json!(system_msg.content);
         }
 
-        // Add user/assistant messages
+        // Add user/assistant messages - handle tool results and tool uses properly
         let mut messages = Vec::new();
         for msg in request.messages.iter().filter(|m| !matches!(m.role, crate::message::Role::System)) {
-            let role = match msg.role {
-                crate::message::Role::User => "user",
-                crate::message::Role::Assistant => "assistant",
-                crate::message::Role::System => continue,
-            };
-            messages.push(serde_json::json!({
-                "role": role,
-                "content": msg.content,
-            }));
+            match msg.role {
+                crate::message::Role::User => {
+                    // Check if this is a tool result message
+                    if let Some(tool_call_id) = &msg.tool_call_id {
+                        // Tool result message needs content blocks format
+                        messages.push(serde_json::json!({
+                            "role": "user",
+                            "content": [{
+                                "type": "tool_result",
+                                "tool_use_id": tool_call_id,
+                                "content": msg.content.clone(),
+                                "is_error": false,
+                            }]
+                        }));
+                    } else {
+                        // Regular user message
+                        messages.push(serde_json::json!({
+                            "role": "user",
+                            "content": msg.content.clone(),
+                        }));
+                    }
+                }
+                crate::message::Role::Assistant => {
+                    // Check if this has tool uses
+                    if let Some(tool_uses) = &msg.tool_uses {
+                        // Assistant message with tool calls needs content blocks
+                        let mut content_blocks = Vec::new();
+                        
+                        // Add text content if present
+                        if !msg.content.is_empty() {
+                            content_blocks.push(serde_json::json!({
+                                "type": "text",
+                                "text": msg.content.clone(),
+                            }));
+                        }
+                        
+                        // Add tool use blocks
+                        for tool_use in tool_uses {
+                            content_blocks.push(serde_json::json!({
+                                "type": "tool_use",
+                                "id": tool_use.id.clone(),
+                                "name": tool_use.name.clone(),
+                                "input": tool_use.input.clone(),
+                            }));
+                        }
+                        
+                        messages.push(serde_json::json!({
+                            "role": "assistant",
+                            "content": content_blocks,
+                        }));
+                    } else {
+                        // Regular assistant message
+                        messages.push(serde_json::json!({
+                            "role": "assistant",
+                            "content": msg.content.clone(),
+                        }));
+                    }
+                }
+                crate::message::Role::System => {}
+            }
         }
         body["messages"] = serde_json::json!(messages);
 
-        // ADD THIS: Include tools if present
+        // Include tools if present
         if let Some(tools) = &request.tools {
             let tools_json: Vec<_> = tools.iter().map(|tool| {
                 serde_json::json!({
