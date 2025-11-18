@@ -439,12 +439,12 @@ impl Client {
             "messages": [],
             "stream": true,
         });
-        
+
         // Add system message if present
         if let Some(system_msg) = request.messages.iter().find(|m| matches!(m.role, crate::message::Role::System)) {
             body["system"] = serde_json::json!(system_msg.content);
         }
-        
+
         // Add user/assistant messages
         let mut messages = Vec::new();
         for msg in request.messages.iter().filter(|m| !matches!(m.role, crate::message::Role::System)) {
@@ -459,7 +459,19 @@ impl Client {
             }));
         }
         body["messages"] = serde_json::json!(messages);
-        
+
+        // ADD THIS: Include tools if present
+        if let Some(tools) = &request.tools {
+            let tools_json: Vec<_> = tools.iter().map(|tool| {
+                serde_json::json!({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.input_schema,
+                })
+            }).collect();
+            body["tools"] = serde_json::json!(tools_json);
+        }
+
         // Apply options
         if let Some(opts) = &request.options {
             if let Some(temp) = opts.temperature {
@@ -555,7 +567,26 @@ impl Client {
             .model(&config.model)
             .messages(messages)
             .stream(true); // Enable streaming!
-        
+
+        // ADD THIS: Add tools if present
+        if let Some(tools) = &request.tools {
+            use async_openai::types::{ChatCompletionTool, ChatCompletionToolType, FunctionObject};
+            
+            let openai_tools: Vec<ChatCompletionTool> = tools
+                .iter()
+                .map(|tool| ChatCompletionTool {
+                    r#type: ChatCompletionToolType::Function,
+                    function: FunctionObject {
+                        name: tool.name.clone(),
+                        description: Some(tool.description.clone()),
+                        parameters: Some(tool.input_schema.clone()),
+                        strict: None,
+                    },
+                })
+                .collect();
+            request_builder.tools(openai_tools);
+        }
+
         // Apply options if provided
         if let Some(opts) = &request.options {
             if let Some(temp) = opts.temperature {
