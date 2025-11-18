@@ -71,7 +71,7 @@ impl Client {
         config: &AnthropicConfig,
         request: &crate::request::CompletionRequest,
     ) -> crate::error::Result<crate::response::CompletionResponse> {
-        use anthropic_sdk::{Anthropic, MessageCreateBuilder};
+        use anthropic_sdk::{Anthropic, MessageCreateBuilder, MessageContent, ContentBlockParam};
         
         let client = Anthropic::new(&config.api_key)
             .map_err(|e| crate::error::Error::AnthropicError(e.to_string()))?;
@@ -84,24 +84,23 @@ impl Client {
             builder = builder.system(&system_msg.content);
         }
         
-        // Add user/assistant messages - need to handle tool results and tool uses
+        // Add user/assistant messages - handle tool results and tool uses
         for msg in request.messages.iter().filter(|m| !matches!(m.role, crate::message::Role::System)) {
             match msg.role {
                 crate::message::Role::User => {
                     // Check if this is a tool result message
                     if let Some(tool_call_id) = &msg.tool_call_id {
-                        // This is a tool result - needs special handling
-                        // Anthropic expects tool_result content blocks
-                        builder = builder.user_with_content_blocks(vec![
-                            anthropic_sdk::ContentBlock::ToolResult {
+                        // This is a tool result - use content blocks
+                        builder = builder.user(MessageContent::Blocks(vec![
+                            ContentBlockParam::ToolResult {
                                 tool_use_id: tool_call_id.clone(),
-                                content: msg.content.clone(),
+                                content: Some(msg.content.clone()),
                                 is_error: None,
                             }
-                        ]);
+                        ]));
                     } else {
                         // Regular user message
-                        builder = builder.user(&msg.content);
+                        builder = builder.user(MessageContent::Text(msg.content.clone()));
                     }
                 }
                 crate::message::Role::Assistant => {
@@ -112,24 +111,24 @@ impl Client {
                         
                         // Add text content if present
                         if !msg.content.is_empty() {
-                            content_blocks.push(anthropic_sdk::ContentBlock::Text {
+                            content_blocks.push(ContentBlockParam::Text {
                                 text: msg.content.clone(),
                             });
                         }
                         
                         // Add tool use blocks
                         for tool_use in tool_uses {
-                            content_blocks.push(anthropic_sdk::ContentBlock::ToolUse {
+                            content_blocks.push(ContentBlockParam::ToolUse {
                                 id: tool_use.id.clone(),
                                 name: tool_use.name.clone(),
                                 input: tool_use.input.clone(),
                             });
                         }
                         
-                        builder = builder.assistant_with_content_blocks(content_blocks);
+                        builder = builder.assistant(MessageContent::Blocks(content_blocks));
                     } else {
                         // Regular assistant message
-                        builder = builder.assistant(&msg.content);
+                        builder = builder.assistant(MessageContent::Text(msg.content.clone()));
                     }
                 }
                 crate::message::Role::System => {}
@@ -143,7 +142,14 @@ impl Client {
                 .map(|tool| anthropic_sdk::Tool {
                     name: tool.name.clone(),
                     description: tool.description.clone(),
-                    input_schema: tool.input_schema.clone(),
+                    input_schema: serde_json::from_value(tool.input_schema.clone())
+                        .unwrap_or_else(|_| anthropic_sdk::types::ToolInputSchema { 
+                            // Provide a default schema if parsing fails
+                            schema_type: "object".to_string(),
+                            properties: serde_json::Map::new(),
+                            required: vec![],
+                            additional: serde_json::Map::new(),
+                        }),
                 })
                 .collect();
             builder = builder.tools(anthropic_tools);
