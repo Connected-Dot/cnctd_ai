@@ -1,6 +1,6 @@
 [package]
 name = "cnctd_ai"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 authors = ["Connected Dot Inc.", "Kyle Ebner <kyle@cnctd.world>"]
 description = "AI and LLM utilities"
@@ -27,10 +27,8 @@ anthropic-sdk-rust = "0.1.1"
 futures = "0.3.31"
 eventsource-stream = "0.2.3"
 bytes = "1.11.0"
+chrono = "0.4"
 
 [dev-dependencies]
 tokio = { version = "1.48.0", features = ["full"] }
 anyhow = "1.0.100"
-
-
-

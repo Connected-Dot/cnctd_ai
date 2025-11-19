@@ -23,6 +23,15 @@ pub enum Error {
     #[error("Network error: {0}")]
     NetworkError(#[from] reqwest::Error),
     
+    #[error("Network error: {0}")]
+    Network(String),
+    
+    #[error("Parse error: {0}")]
+    Parse(String),
+    
+    #[error("Tool execution error: {0}")]
+    ToolExecution(String),
+    
     #[error("Anthropic SDK error: {0}")]
     AnthropicError(String),
     
