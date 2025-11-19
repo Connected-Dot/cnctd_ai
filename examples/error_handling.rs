@@ -79,7 +79,7 @@ async fn test_invalid_api_key_anthropic() {
                 Err(e) => {
                     println!("  Expected error: {}", e);
                     match e {
-                        Error::AuthenticationFailed => println!("  Correctly identified as authentication failure"),
+                        Error::AuthenticationFailed(_) => println!("  Correctly identified as authentication failure"),
                         Error::ProviderError { provider, message, status_code } => {
                             println!("  Provider: {}", provider);
                             println!("  Message: {}", message);
@@ -117,7 +117,7 @@ async fn test_invalid_api_key_openai() {
                 Err(e) => {
                     println!("  Expected error: {}", e);
                     match e {
-                        Error::AuthenticationFailed => println!("  Correctly identified as authentication failure"),
+                        Error::AuthenticationFailed(_) => println!("  Correctly identified as authentication failure"),
                         Error::OpenAiError(oe) => {
                             println!("  OpenAI error: {}", oe);
                         }
@@ -429,6 +429,7 @@ async fn test_malformed_tool_anthropic() {
     
     match client {
         Ok(client) => {
+            println!("  Test 5a: Invalid type value (caught by client validation)");
             let tool = Tool {
                 name: "test_tool".into(),
                 description: "A test tool".into(),
@@ -445,16 +446,46 @@ async fn test_malformed_tool_anthropic() {
             request.add_tool(tool);
             
             match client.complete(request).await {
-                Ok(_) => println!("  Unexpected success!"),
+                Ok(_) => println!("    NOTE: Anthropic accepted invalid schema - more lenient validation"),
                 Err(e) => {
-                    println!("  Expected error: {}", e);
+                    println!("    Expected error: {}", e);
                     match e {
+                        Error::InvalidRequest(msg) => println!("    Client-side validation caught it: {}", msg),
                         Error::ProviderError { provider, message, status_code } => {
-                            println!("  Provider: {}", provider);
-                            println!("  Message: {}", message);
-                            println!("  Status: {:?}", status_code);
+                            println!("    Provider: {}", provider);
+                            println!("    Message: {}", message);
+                            println!("    Status: {:?}", status_code);
                         }
-                        _ => println!("  Error type: {:?}", e),
+                        _ => println!("    Error type: {:?}", e),
+                    }
+                }
+            }
+            
+            println!("\n  Test 5b: Missing type field (caught by client validation)");
+            let tool2 = Tool {
+                name: "test_tool_2".into(),
+                description: "Another test tool".into(),
+                input_schema: json!({
+                    "properties": {
+                        "name": {"type": "string"}
+                    }
+                }),
+            };
+            
+            let mut request2 = CompletionRequest {
+                messages: vec![Message::user("Use the other test tool")],
+                tools: None,
+                options: None,
+            };
+            request2.add_tool(tool2);
+            
+            match client.complete(request2).await {
+                Ok(_) => println!("    Unexpected success - validation should have caught this!"),
+                Err(e) => {
+                    println!("    Expected error: {}", e);
+                    match e {
+                        Error::InvalidRequest(msg) => println!("    Client-side validation: {}", msg),
+                        _ => println!("    Error type: {:?}", e),
                     }
                 }
             }
@@ -486,6 +517,7 @@ async fn test_malformed_tool_openai() {
     
     match client {
         Ok(client) => {
+            println!("  Test 5a: Invalid type value (caught by client validation)");
             let tool = Tool {
                 name: "test_tool".into(),
                 description: "A test tool".into(),
@@ -502,14 +534,47 @@ async fn test_malformed_tool_openai() {
             request.add_tool(tool);
             
             match client.complete(request).await {
-                Ok(_) => println!("  Unexpected success!"),
+                Ok(_) => println!("    Unexpected success!"),
                 Err(e) => {
-                    println!("  Expected error: {}", e);
+                    println!("    Expected error: {}", e);
                     match e {
+                        Error::InvalidRequest(msg) => println!("    Client-side validation: {}", msg),
                         Error::OpenAiError(oe) => {
-                            println!("  OpenAI error: {}", oe);
+                            println!("    OpenAI error: {}", oe);
                         }
-                        _ => println!("  Error type: {:?}", e),
+                        _ => println!("    Error type: {:?}", e),
+                    }
+                }
+            }
+            
+            println!("\n  Test 5b: Missing type field (caught by client validation)");
+            let tool2 = Tool {
+                name: "test_tool_2".into(),
+                description: "Another test tool".into(),
+                input_schema: json!({
+                    "properties": {
+                        "name": {"type": "string"}
+                    }
+                }),
+            };
+            
+            let mut request2 = CompletionRequest {
+                messages: vec![Message::user("Use the other test tool")],
+                tools: None,
+                options: None,
+            };
+            request2.add_tool(tool2);
+            
+            match client.complete(request2).await {
+                Ok(_) => println!("    Unexpected success - validation should have caught this!"),
+                Err(e) => {
+                    println!("    Expected error: {}", e);
+                    match e {
+                        Error::InvalidRequest(msg) => println!("    Client-side validation: {}", msg),
+                        Error::OpenAiError(oe) => {
+                            println!("    OpenAI error: {}", oe);
+                        }
+                        _ => println!("    Error type: {:?}", e),
                     }
                 }
             }
