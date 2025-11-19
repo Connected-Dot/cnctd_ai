@@ -7,7 +7,7 @@
 //! 4. Execute a tool
 //!
 //! Set these environment variables:
-//! - GATEWAY_URL: URL of your MCP gateway (e.g., https://api.cnctd.world)
+//! - GATEWAY_URL: URL of your MCP gateway (e.g., https://mcp.cnctd.world)
 //! - GATEWAY_TOKEN: Bearer token for authentication (optional)
 
 use cnctd_ai::{McpGateway, Tool, tool_result_to_string};
@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     
     let gateway_url = env::var("GATEWAY_URL")
-        .unwrap_or_else(|_| "https://api.cnctd.world".to_string());
+        .unwrap_or_else(|_| "https://mcp.cnctd.world".to_string());
     
     println!("=== MCP Gateway Example ===\n");
     println!("Gateway URL: {}\n", gateway_url);

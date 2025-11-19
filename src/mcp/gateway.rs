@@ -1,6 +1,6 @@
 use crate::{Error, Result, Tool};
 use reqwest::Client;
-use rmcp::model::{CallToolRequestParam, CallToolResult, Content};
+use rmcp::model::{CallToolResult, RawContent};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -272,9 +272,9 @@ impl McpGateway {
 impl From<&rmcp::model::Tool> for Tool {
     fn from(rmcp_tool: &rmcp::model::Tool) -> Self {
         Self {
-            name: rmcp_tool.name.clone(),
-            description: rmcp_tool.description.clone().unwrap_or_default(),
-            input_schema: rmcp_tool.input_schema.clone(),
+            name: rmcp_tool.name.to_string(),
+            description: rmcp_tool.description.clone().map(|d| d.to_string()).unwrap_or_default(),
+            input_schema: Value::Object((*rmcp_tool.input_schema).clone()),
         }
     }
 }
@@ -284,11 +284,26 @@ pub fn tool_result_to_string(result: &CallToolResult) -> String {
     result
         .content
         .iter()
-        .filter_map(|content| match content {
-            Content::Text { text } => Some(text.clone()),
-            Content::Image { .. } => Some("[image]".to_string()),
-            Content::Resource { .. } => Some("[resource]".to_string()),
+        .filter_map(|annotated| match &annotated.raw {
+            RawContent::Text(text) => Some(text.clone()),
+            RawContent::Image(_) => Some(rmcp::model::RawTextContent {
+                text: "[image]".to_string(),
+                meta: None,
+            }),
+            RawContent::Resource(_) => Some(rmcp::model::RawTextContent {
+                text: "[resource]".to_string(),
+                meta: None,
+            }),
+            RawContent::Audio(_raw_audio_content) => Some(rmcp::model::RawTextContent {
+                text: "[audio]".to_string(),
+                meta: None,
+            }),
+            RawContent::ResourceLink(_raw_resource) => Some(rmcp::model::RawTextContent {
+                text: "[resource-link]".to_string(),
+                meta: None,
+            }),
         })
+        .map(|raw_text| raw_text.text)
         .collect::<Vec<_>>()
         .join("\n")
 }
