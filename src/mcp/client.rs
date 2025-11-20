@@ -87,12 +87,44 @@ pub struct StdioConfig {
     pub env: Option<Vec<(String, String)>>,
 }
 
+// Type alias for the service - this is the opaque type returned by ().serve()
+// We use a type alias to avoid having to name the complex concrete type
+type StdioService = impl rmcp::service::Service<rmcp::service::RoleClient> + Send;
+
+/// Helper to create the stdio service and return the opaque type
+async fn create_stdio_service(config: &StdioConfig) -> Result<StdioService> {
+    // Build the command using rmcp's ConfigureCommandExt
+    let mut command = Command::new(&config.command);
+    
+    // Add arguments
+    for arg in &config.args {
+        command.arg(arg);
+    }
+
+    // Add environment variables if provided
+    if let Some(env_vars) = &config.env {
+        for (key, value) in env_vars {
+            command.env(key, value);
+        }
+    }
+
+    // Create transport and service using rmcp's API
+    let transport = TokioChildProcess::new(command.configure(|_| {}))
+        .map_err(|e| Error::Other(format!("Failed to create child process transport: {}", e)))?;
+
+    let service = ().serve(transport)
+        .await
+        .map_err(|e| Error::Other(format!("Failed to initialize MCP service: {}", e)))?;
+
+    Ok(service)
+}
+
 /// Stdio MCP client wrapping the rmcp service
 ///
 /// This struct exists because rmcp's service type isn't dyn-compatible and
 /// can't be stored as a trait object. We store the opaque service type here.
 pub struct StdioClient {
-    service: rmcp::service::client::ClientService<rmcp::ClientHandler, TokioChildProcess>,
+    service: StdioService,
     config: StdioConfig,
 }
 
@@ -208,29 +240,7 @@ impl McpClient {
     /// # }
     /// ```
     pub async fn from_stdio(config: StdioConfig) -> Result<Self> {
-        // Build the command using rmcp's ConfigureCommandExt
-        let mut command = Command::new(&config.command);
-        
-        // Add arguments
-        for arg in &config.args {
-            command.arg(arg);
-        }
-
-        // Add environment variables if provided
-        if let Some(env_vars) = &config.env {
-            for (key, value) in env_vars {
-                command.env(key, value);
-            }
-        }
-
-        // Create transport and service using rmcp's API
-        let transport = TokioChildProcess::new(command.configure(|_| {}))
-            .map_err(|e| Error::Other(format!("Failed to create child process transport: {}", e)))?;
-
-        let service = rmcp::ClientHandler
-            .serve(transport)
-            .await
-            .map_err(|e| Error::Other(format!("Failed to initialize MCP service: {}", e)))?;
+        let service = create_stdio_service(&config).await?;
 
         Ok(Self::Stdio(StdioClient {
             service,
