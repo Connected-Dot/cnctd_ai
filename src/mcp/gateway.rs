@@ -1,10 +1,10 @@
 use crate::{Error, Result, Tool};
 use reqwest::Client;
-use rmcp::model::{CallToolResult, RawContent};
+use rmcp::model::CallToolResult;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-/// Information about an MCP server available through the gateway
+/// Information about an MCP server available through the gateway (includes URL)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerInfo {
     pub name: String,
@@ -52,8 +52,12 @@ struct JsonRpcError {
     data: Option<Value>,
 }
 
-/// Client for interacting with an MCP gateway
+/// Legacy client for interacting with an MCP gateway
 /// 
+/// This is the original gateway client implementation. For new code, consider using
+/// the unified `McpClient` which supports both gateway and stdio transports with
+/// a consistent interface.
+///
 /// The gateway acts as a proxy to multiple MCP servers, exposing them via HTTP.
 /// This client provides methods to discover servers, list tools, and execute tools.
 #[derive(Clone, Debug)]
@@ -277,33 +281,4 @@ impl From<&rmcp::model::Tool> for Tool {
             input_schema: Value::Object((*rmcp_tool.input_schema).clone()),
         }
     }
-}
-
-/// Convert CallToolResult content to a simple string for Message::tool_result
-pub fn tool_result_to_string(result: &CallToolResult) -> String {
-    result
-        .content
-        .iter()
-        .filter_map(|annotated| match &annotated.raw {
-            RawContent::Text(text) => Some(text.clone()),
-            RawContent::Image(_) => Some(rmcp::model::RawTextContent {
-                text: "[image]".to_string(),
-                meta: None,
-            }),
-            RawContent::Resource(_) => Some(rmcp::model::RawTextContent {
-                text: "[resource]".to_string(),
-                meta: None,
-            }),
-            RawContent::Audio(_raw_audio_content) => Some(rmcp::model::RawTextContent {
-                text: "[audio]".to_string(),
-                meta: None,
-            }),
-            RawContent::ResourceLink(_raw_resource) => Some(rmcp::model::RawTextContent {
-                text: "[resource-link]".to_string(),
-                meta: None,
-            }),
-        })
-        .map(|raw_text| raw_text.text)
-        .collect::<Vec<_>>()
-        .join("\n")
 }
