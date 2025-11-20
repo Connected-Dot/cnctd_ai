@@ -95,7 +95,7 @@ impl Client {
                             ContentBlockParam::ToolResult {
                                 tool_use_id: tool_call_id.clone(),
                                 content: Some(msg.content.clone()),
-                                is_error: Some(false),  // <-- Change None to Some(false)
+                                is_error: Some(false),
                             }
                         ]));
 
@@ -141,11 +141,10 @@ impl Client {
             let anthropic_tools: Vec<anthropic_sdk::Tool> = tools
                 .iter()
                 .map(|tool| anthropic_sdk::Tool {
-                    name: tool.name.clone(),
-                    description: tool.description.clone(),
-                    input_schema: serde_json::from_value(tool.input_schema.clone())
-                        .unwrap_or_else(|_| anthropic_sdk::types::ToolInputSchema { 
-                            // Provide a default schema if parsing fails
+                    name: tool.name.to_string(),
+                    description: tool.description.as_ref().map(|d| d.to_string()).unwrap_or_default(),
+                    input_schema: serde_json::from_value(serde_json::Value::Object((*tool.input_schema).clone()))
+                        .unwrap_or_else(|_| anthropic_sdk::types::ToolInputSchema {
                             schema_type: "object".to_string(),
                             properties: serde_json::Map::new(),
                             required: vec![],
@@ -308,9 +307,9 @@ impl Client {
                 .map(|tool| ChatCompletionTool {
                     r#type: ChatCompletionToolType::Function,
                     function: FunctionObject {
-                        name: tool.name.clone(),
-                        description: Some(tool.description.clone()),
-                        parameters: Some(tool.input_schema.clone()),
+                        name: tool.name.to_string(),
+                        description: tool.description.as_ref().map(|d| d.to_string()),
+                        parameters: Some(serde_json::Value::Object((*tool.input_schema).clone())),
                         strict: None,
                     },
                 })
@@ -515,9 +514,9 @@ impl Client {
         if let Some(tools) = &request.tools {
             let tools_json: Vec<_> = tools.iter().map(|tool| {
                 serde_json::json!({
-                    "name": tool.name,
-                    "description": tool.description,
-                    "input_schema": tool.input_schema,
+                    "name": tool.name.to_string(),
+                    "description": tool.description.as_ref().map(|d| d.to_string()).unwrap_or_default(),
+                    "input_schema": serde_json::Value::Object((*tool.input_schema).clone()),
                 })
             }).collect();
             body["tools"] = serde_json::json!(tools_json);
@@ -658,9 +657,9 @@ impl Client {
                 .map(|tool| ChatCompletionTool {
                     r#type: ChatCompletionToolType::Function,
                     function: FunctionObject {
-                        name: tool.name.clone(),
-                        description: Some(tool.description.clone()),
-                        parameters: Some(tool.input_schema.clone()),
+                        name: tool.name.to_string(),
+                        description: tool.description.as_ref().map(|d| d.to_string()),
+                        parameters: Some(serde_json::Value::Object((*tool.input_schema).clone())),
                         strict: None,
                     },
                 })
