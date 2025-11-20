@@ -29,11 +29,9 @@ async fn test_anthropic_streaming_tools() -> Result<()> {
         None,
     )?;
     
-    // Define a simple weather tool using rmcp::model::Tool
-    let weather_tool = Tool {
-        name: Cow::Borrowed("get_weather"),
-        description: Some(Cow::Borrowed("Get the current weather for a location")),
-        input_schema: Arc::new(serde_json::from_value(json!({
+    // Create tool schema as a Map
+    let schema_map = match serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
+        json!({
             "type": "object",
             "properties": {
                 "location": {
@@ -47,7 +45,20 @@ async fn test_anthropic_streaming_tools() -> Result<()> {
                 }
             },
             "required": ["location"]
-        }))?),
+        })
+    ) {
+        Ok(map) => map,
+        Err(e) => {
+            eprintln!("Failed to create schema map: {}", e);
+            return Err(e.into());
+        }
+    };
+    
+    // Define a simple weather tool using rmcp::model::Tool
+    let weather_tool = Tool {
+        name: Cow::Borrowed("get_weather"),
+        description: Some(Cow::Borrowed("Get the current weather for a location")),
+        input_schema: Arc::new(schema_map),
     };
     
     let mut messages = vec![
@@ -135,11 +146,9 @@ async fn test_openai_streaming_tools() -> Result<()> {
         None,
     )?;
     
-    // Same tool definition works for both providers
-    let weather_tool = Tool {
-        name: Cow::Borrowed("get_weather"),
-        description: Some(Cow::Borrowed("Get the current weather for a location")),
-        input_schema: Arc::new(serde_json::from_value(json!({
+    // Create tool schema as a Map
+    let schema_map = match serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
+        json!({
             "type": "object",
             "properties": {
                 "location": {
@@ -153,7 +162,20 @@ async fn test_openai_streaming_tools() -> Result<()> {
                 }
             },
             "required": ["location"]
-        }))?),
+        })
+    ) {
+        Ok(map) => map,
+        Err(e) => {
+            eprintln!("Failed to create schema map: {}", e);
+            return Err(e.into());
+        }
+    };
+    
+    // Same tool definition works for both providers
+    let weather_tool = Tool {
+        name: Cow::Borrowed("get_weather"),
+        description: Some(Cow::Borrowed("Get the current weather for a location")),
+        input_schema: Arc::new(schema_map),
     };
     
     let mut messages = vec![
