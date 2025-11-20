@@ -1,10 +1,11 @@
 use crate::{Error, Result};
 use reqwest::Client as HttpClient;
-use rmcp::model::{CallToolRequestParam, CallToolResult, ListToolsRequest, Tool};
+use rmcp::model::{CallToolRequestParam, CallToolResult, Tool};
 use rmcp::service::{RoleClient, RunningService, ServiceExt};
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::borrow::Cow;
 use tokio::process::Command;
 
 /// JSON-RPC 2.0 request structure
@@ -97,7 +98,7 @@ impl StdioClient {
     /// List all tools available from this MCP server
     pub async fn list_tools(&self) -> Result<Vec<Tool>> {
         let result = self.service
-            .list_tools(ListToolsRequest::default())
+            .list_tools(None)
             .await
             .map_err(|e| Error::Other(format!("Failed to list tools via stdio: {}", e)))?;
 
@@ -121,10 +122,9 @@ impl StdioClient {
             }
             None => None,
         };
-
         let result = self.service
             .call_tool(CallToolRequestParam {
-                name: tool_name.into(),
+                name: Cow::Owned(tool_name.to_string()),
                 arguments: args_map,
             })
             .await
