@@ -87,6 +87,65 @@ pub struct StdioConfig {
     pub env: Option<Vec<(String, String)>>,
 }
 
+/// Stdio MCP client wrapping the rmcp service
+///
+/// This struct exists because rmcp's service type isn't dyn-compatible and
+/// can't be stored as a trait object. We store the opaque service type here.
+pub struct StdioClient {
+    service: rmcp::service::client::ClientService<rmcp::ClientHandler, TokioChildProcess>,
+    config: StdioConfig,
+}
+
+impl StdioClient {
+    /// List all tools available from this MCP server
+    pub async fn list_tools(&self) -> Result<Vec<Tool>> {
+        let result = self.service
+            .list_tools(ListToolsRequest::default())
+            .await
+            .map_err(|e| Error::Other(format!("Failed to list tools via stdio: {}", e)))?;
+
+        Ok(result.tools)
+    }
+
+    /// Call a tool with the given arguments
+    pub async fn call_tool(
+        &self,
+        tool_name: &str,
+        arguments: Option<Value>,
+    ) -> Result<CallToolResult> {
+        // Convert Value to Map<String, Value>
+        let args_map = match arguments {
+            Some(Value::Object(map)) => Some(map),
+            Some(other) => {
+                return Err(Error::Other(format!(
+                    "Tool arguments must be a JSON object, got: {:?}",
+                    other
+                )));
+            }
+            None => None,
+        };
+
+        let result = self.service
+            .call_tool(CallToolRequestParam {
+                name: tool_name.into(),
+                arguments: args_map,
+            })
+            .await
+            .map_err(|e| Error::ToolExecution(format!("Tool execution failed: {}", e)))?;
+
+        Ok(result)
+    }
+
+    /// Get server info
+    pub fn server_info(&self) -> ServerInfo {
+        ServerInfo {
+            name: self.config.command.clone(),
+            description: None,
+            available_tools: vec![],
+        }
+    }
+}
+
 /// Unified MCP client supporting both gateway and stdio transports
 pub enum McpClient {
     /// Gateway transport - communicates via HTTP with an MCP gateway
@@ -95,13 +154,7 @@ pub enum McpClient {
         http_client: HttpClient,
     },
     /// Stdio transport - spawns and communicates with a local MCP server
-    /// 
-    /// Note: The concrete service type is used here rather than a trait object
-    /// because rmcp's Service trait is not dyn-compatible
-    Stdio {
-        service: rmcp::prelude::ClientService<TokioChildProcess>,
-        config: StdioConfig,
-    },
+    Stdio(StdioClient),
 }
 
 impl McpClient {
@@ -174,14 +227,15 @@ impl McpClient {
         let transport = TokioChildProcess::new(command.configure(|_| {}))
             .map_err(|e| Error::Other(format!("Failed to create child process transport: {}", e)))?;
 
-        let service = ().serve(transport)
+        let service = rmcp::ClientHandler
+            .serve(transport)
             .await
             .map_err(|e| Error::Other(format!("Failed to initialize MCP service: {}", e)))?;
 
-        Ok(Self::Stdio {
+        Ok(Self::Stdio(StdioClient {
             service,
             config,
-        })
+        }))
     }
 
     /// List all tools available from this MCP server
@@ -193,8 +247,8 @@ impl McpClient {
             Self::Gateway { config, http_client } => {
                 self.list_tools_gateway(config, http_client).await
             }
-            Self::Stdio { service, .. } => {
-                self.list_tools_stdio(service).await
+            Self::Stdio(client) => {
+                client.list_tools().await
             }
         }
     }
@@ -216,8 +270,8 @@ impl McpClient {
             Self::Gateway { config, http_client } => {
                 self.call_tool_gateway(config, http_client, tool_name, arguments).await
             }
-            Self::Stdio { service, .. } => {
-                self.call_tool_stdio(service, tool_name, arguments).await
+            Self::Stdio(client) => {
+                client.call_tool(tool_name, arguments).await
             }
         }
     }
@@ -231,14 +285,8 @@ impl McpClient {
             Self::Gateway { config, http_client } => {
                 self.server_info_gateway(config, http_client).await
             }
-            Self::Stdio { config, .. } => {
-                // For stdio, we don't have a description available
-                // The caller can query list_tools() to get available tools
-                Ok(ServerInfo {
-                    name: config.command.clone(),
-                    description: None,
-                    available_tools: vec![],
-                })
+            Self::Stdio(client) => {
+                Ok(client.server_info())
             }
         }
     }
@@ -380,48 +428,5 @@ impl McpClient {
             description: server.description,
             available_tools: server.available_tools,
         })
-    }
-
-    // ==================== Stdio Implementation ====================
-
-    async fn list_tools_stdio(
-        &self,
-        service: &rmcp::prelude::ClientService<TokioChildProcess>,
-    ) -> Result<Vec<Tool>> {
-        let result = service
-            .list_tools(ListToolsRequest::default())
-            .await
-            .map_err(|e| Error::Other(format!("Failed to list tools via stdio: {}", e)))?;
-
-        Ok(result.tools)
-    }
-
-    async fn call_tool_stdio(
-        &self,
-        service: &rmcp::prelude::ClientService<TokioChildProcess>,
-        tool_name: &str,
-        arguments: Option<Value>,
-    ) -> Result<CallToolResult> {
-        // Convert Value to Map<String, Value>
-        let args_map = match arguments {
-            Some(Value::Object(map)) => Some(map),
-            Some(other) => {
-                return Err(Error::Other(format!(
-                    "Tool arguments must be a JSON object, got: {:?}",
-                    other
-                )));
-            }
-            None => None,
-        };
-
-        let result = service
-            .call_tool(CallToolRequestParam {
-                name: tool_name.into(),
-                arguments: args_map,
-            })
-            .await
-            .map_err(|e| Error::ToolExecution(format!("Tool execution failed: {}", e)))?;
-
-        Ok(result)
     }
 }
