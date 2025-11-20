@@ -1,18 +1,9 @@
-use crate::{Error, Result, Tool};
+use crate::{Error, Result};
+use crate::mcp::ServerInfo;
 use reqwest::Client;
 use rmcp::model::CallToolResult;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-
-/// Information about an MCP server available through the gateway (includes URL)
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ServerInfo {
-    pub name: String,
-    pub url: String,
-    pub description: Option<String>,
-    #[serde(default)]
-    pub available_tools: Vec<rmcp::model::Tool>,
-}
 
 /// Response from the gateway's /list endpoint
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -269,16 +260,5 @@ impl McpGateway {
         json_rpc_response
             .result
             .ok_or_else(|| Error::Parse("No result in JSON-RPC response".to_string()))
-    }
-}
-
-/// Convert rmcp Tool to cnctd_ai Tool
-impl From<&rmcp::model::Tool> for Tool {
-    fn from(rmcp_tool: &rmcp::model::Tool) -> Self {
-        Self {
-            name: rmcp_tool.name.to_string(),
-            description: rmcp_tool.description.clone().map(|d| d.to_string()).unwrap_or_default(),
-            input_schema: Value::Object((*rmcp_tool.input_schema).clone()),
-        }
     }
 }
