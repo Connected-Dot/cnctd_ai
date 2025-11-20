@@ -1,7 +1,7 @@
 use crate::{Error, Result};
 use reqwest::Client as HttpClient;
 use rmcp::model::{CallToolRequestParam, CallToolResult, ListToolsRequest, Tool};
-use rmcp::service::ServiceExt;
+use rmcp::service::{RoleClient, RunningService, ServiceExt};
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -87,44 +87,9 @@ pub struct StdioConfig {
     pub env: Option<Vec<(String, String)>>,
 }
 
-// Type alias for the service - this is the opaque type returned by ().serve()
-// We use a type alias to avoid having to name the complex concrete type
-type StdioService = impl rmcp::service::Service<rmcp::service::RoleClient> + Send;
-
-/// Helper to create the stdio service and return the opaque type
-async fn create_stdio_service(config: &StdioConfig) -> Result<StdioService> {
-    // Build the command using rmcp's ConfigureCommandExt
-    let mut command = Command::new(&config.command);
-    
-    // Add arguments
-    for arg in &config.args {
-        command.arg(arg);
-    }
-
-    // Add environment variables if provided
-    if let Some(env_vars) = &config.env {
-        for (key, value) in env_vars {
-            command.env(key, value);
-        }
-    }
-
-    // Create transport and service using rmcp's API
-    let transport = TokioChildProcess::new(command.configure(|_| {}))
-        .map_err(|e| Error::Other(format!("Failed to create child process transport: {}", e)))?;
-
-    let service = ().serve(transport)
-        .await
-        .map_err(|e| Error::Other(format!("Failed to initialize MCP service: {}", e)))?;
-
-    Ok(service)
-}
-
 /// Stdio MCP client wrapping the rmcp service
-///
-/// This struct exists because rmcp's service type isn't dyn-compatible and
-/// can't be stored as a trait object. We store the opaque service type here.
 pub struct StdioClient {
-    service: StdioService,
+    service: RunningService<RoleClient, ()>,
     config: StdioConfig,
 }
 
@@ -191,22 +156,6 @@ pub enum McpClient {
 
 impl McpClient {
     /// Create a new MCP client using gateway transport
-    ///
-    /// # Arguments
-    /// * `config` - Gateway configuration including base URL, server name, and optional auth
-    ///
-    /// # Example
-    /// ```no_run
-    /// use cnctd_ai::mcp::{McpClient, GatewayConfig};
-    ///
-    /// let config = GatewayConfig {
-    ///     base_url: "https://mcp.cnctd.world".to_string(),
-    ///     server_name: "github".to_string(),
-    ///     auth_token: Some("your-token".to_string()),
-    /// };
-    ///
-    /// let client = McpClient::from_gateway(config);
-    /// ```
     pub fn from_gateway(config: GatewayConfig) -> Self {
         Self::Gateway {
             config,
@@ -215,32 +164,29 @@ impl McpClient {
     }
 
     /// Create a new MCP client using stdio transport
-    ///
-    /// This spawns a child process and communicates via stdin/stdout using the MCP protocol.
-    ///
-    /// # Arguments
-    /// * `config` - Stdio configuration including command, args, and optional environment
-    ///
-    /// # Example
-    /// ```no_run
-    /// use cnctd_ai::mcp::{McpClient, StdioConfig};
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let config = StdioConfig {
-    ///     command: "npx".to_string(),
-    ///     args: vec!["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-    ///         .into_iter()
-    ///         .map(String::from)
-    ///         .collect(),
-    ///     env: None,
-    /// };
-    ///
-    /// let client = McpClient::from_stdio(config).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
     pub async fn from_stdio(config: StdioConfig) -> Result<Self> {
-        let service = create_stdio_service(&config).await?;
+        // Build the command
+        let mut command = Command::new(&config.command);
+        
+        // Add arguments
+        for arg in &config.args {
+            command.arg(arg);
+        }
+
+        // Add environment variables if provided
+        if let Some(env_vars) = &config.env {
+            for (key, value) in env_vars {
+                command.env(key, value);
+            }
+        }
+
+        // Create transport and service using rmcp's API
+        let transport = TokioChildProcess::new(command.configure(|_| {}))
+            .map_err(|e| Error::Other(format!("Failed to create child process transport: {}", e)))?;
+
+        let service = ().serve(transport)
+            .await
+            .map_err(|e| Error::Other(format!("Failed to initialize MCP service: {}", e)))?;
 
         Ok(Self::Stdio(StdioClient {
             service,
@@ -249,9 +195,6 @@ impl McpClient {
     }
 
     /// List all tools available from this MCP server
-    ///
-    /// # Returns
-    /// A vector of MCP tools with their schemas
     pub async fn list_tools(&self) -> Result<Vec<Tool>> {
         match self {
             Self::Gateway { config, http_client } => {
@@ -264,13 +207,6 @@ impl McpClient {
     }
 
     /// Call a tool with the given arguments
-    ///
-    /// # Arguments
-    /// * `tool_name` - Name of the tool to call
-    /// * `arguments` - Tool arguments as a JSON object (or null for no arguments)
-    ///
-    /// # Returns
-    /// The result from the tool execution
     pub async fn call_tool(
         &self,
         tool_name: &str,
@@ -287,9 +223,6 @@ impl McpClient {
     }
 
     /// Get information about this MCP server
-    ///
-    /// For gateway clients, this queries the gateway for server info.
-    /// For stdio clients, this returns basic info from the configuration.
     pub async fn server_info(&self) -> Result<ServerInfo> {
         match self {
             Self::Gateway { config, http_client } => {
