@@ -8,7 +8,7 @@ pub struct CompletionResponse {
     pub finish_reason: FinishReason,
     pub model: String,
     #[serde(skip)]
-    pub(crate) tool_uses: Option<Vec<ToolUse>>,
+    pub tool_uses: Option<Vec<ToolUse>>,
 }
 
 impl CompletionResponse {

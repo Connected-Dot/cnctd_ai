@@ -1,10 +1,6 @@
 //! Example: Complete Agent with MCP Gateway Integration
 //!
-//! This example demonstrates a complete agentic workflow:
-//! 1. Connect to MCP gateway to get available tools
-//! 2. Use Claude to decide which tools to call
-//! 3. Execute tools via the gateway
-//! 4. Return results to Claude for final response
+//! This example demonstrates a complete agentic workflow with proper token management.
 //!
 //! Set these environment variables:
 //! - ANTHROPIC_API_KEY: Your Anthropic API key
@@ -13,7 +9,7 @@
 
 use anyhow::Result;
 use cnctd_ai::{
-    Client, AnthropicConfig, Message, CompletionRequest,
+    Client, AnthropicConfig, Message, CompletionRequest, RequestOptions,
     McpGateway, tool_result_to_string,
 };
 use serde_json::json;
@@ -52,11 +48,6 @@ async fn main() -> Result<()> {
     
     // Get available servers and tools
     let servers = gateway.list_servers().await?;
-    println!("Available MCP servers:");
-    for server in &servers {
-        println!("  - {} ({} tools)", server.name, server.available_tools.len());
-    }
-    println!();
     
     // Find brave-search server (if available)
     let search_server = servers.iter()
@@ -65,25 +56,23 @@ async fn main() -> Result<()> {
     
     // Get tools from the search server
     let mcp_tools = gateway.list_tools(&search_server.name).await?;
-    println!("Tools from {}:", search_server.name);
-    for tool in &mcp_tools {
-        println!("  - {}", tool.name);
-    }
-    println!();
     
-    // Start a conversation with Claude
+    // Start a conversation with Claude - be explicit about ONE search
     let user_query = "What are the latest developments in Rust async programming? \
-                     Use web search to find recent information.";
+                     Search the web ONCE and then provide a comprehensive answer based on those results.";
     
     println!("User: {}\n", user_query);
     
     let mut messages = vec![Message::user(user_query)];
     
-    // Create request with tools from MCP
+    // Create request with tools from MCP and reduced max_tokens
     let mut request = CompletionRequest {
         messages: messages.clone(),
         tools: None,
-        options: None,
+        options: Some(RequestOptions {
+            max_tokens: Some(1024),  // Reduced from default 4096
+            ..Default::default()
+        }),
     };
     
     // Add MCP tools to the request
@@ -91,45 +80,57 @@ async fn main() -> Result<()> {
         request.add_tool(tool.clone());
     }
     
-    // First call - Claude decides what to do
+    // Single iteration approach - simpler and more token-efficient
     println!("Claude is thinking...\n");
-    let response = claude.complete(request).await?;
+    let response = claude.complete(request.clone()).await?;
     
     // Check if Claude wants to use a tool
     if let Some(tool_use) = response.tool_use() {
-        println!("Claude wants to use tool: {}", tool_use.name);
-        println!("Arguments: {}\n", tool_use.input);
+        println!("Claude is using tool: {}", tool_use.name);
         
-        // Execute the tool via MCP gateway
-        println!("Executing tool via MCP gateway...");
+        // Execute the tool
         let tool_result = gateway.call_tool(
             &search_server.name,
             &tool_use.name,
             Some(tool_use.input.clone()),
         ).await?;
         
-        let result_text = tool_result_to_string(&tool_result);
-        println!("Tool result received ({} bytes)\n", result_text.len());
+        let mut result_text = tool_result_to_string(&tool_result);
         
-        // Add tool use and result to conversation
-        messages.push(Message::assistant_with_tool_use(tool_use.clone()));
+        // Aggressively truncate to keep tokens manageable
+        const MAX_RESULT_SIZE: usize = 1500;
+        if result_text.len() > MAX_RESULT_SIZE {
+            result_text.truncate(MAX_RESULT_SIZE);
+            result_text.push_str("\n\n[Results truncated]");
+        }
+        
+        println!("Tool executed ({} bytes of results)\n", result_text.len());
+        
+        // Add messages and get final response
+        messages.push(response.message.clone());
         messages.push(Message::tool_result(tool_use.id.clone(), result_text));
         
-        // Second call - Claude processes the results
-        println!("Claude is processing results...\n");
-        let final_request = CompletionRequest {
-            messages: messages.clone(),
-            tools: None,
-            options: None,
-        };
+        // Final response
+        request.messages = messages;
+        let final_response = claude.complete(request).await?;
         
-        let final_response = claude.complete(final_request).await?;
+        println!("Claude's response:");
+        println!("{}\n", final_response.text());
         
-        println!("Claude's final response:");
-        println!("{}", final_response.text());
-        println!("\n(Used {} tokens)", final_response.usage.total_tokens);
+        println!("Token usage:");
+        println!("  First call:  {} prompt, {} completion", 
+            response.usage.prompt_tokens, 
+            response.usage.completion_tokens
+        );
+        println!("  Second call: {} prompt, {} completion", 
+            final_response.usage.prompt_tokens,
+            final_response.usage.completion_tokens
+        );
+        println!("  Total: {} tokens", 
+            response.usage.total_tokens + final_response.usage.total_tokens
+        );
     } else {
-        // Claude responded without using tools
+        // Claude responded directly without tools
         println!("Claude's response:");
         println!("{}", response.text());
     }
