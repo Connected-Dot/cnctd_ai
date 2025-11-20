@@ -138,12 +138,21 @@ impl McpGateway {
             )));
         }
         
-        let tools: Vec<rmcp::model::Tool> = response
+        // Parse the response body as JSON Value first to inspect it
+        let response_json: Value = response
             .json()
             .await
-            .map_err(|e| Error::Parse(format!("Failed to parse tools for {}: {}", server_name, e)))?;
+            .map_err(|e| Error::Parse(format!("Failed to parse response body for {}: {}", server_name, e)))?;
         
-        Ok(tools)
+        // The gateway returns { "server": "name", "tools": [...] }
+        // Extract the tools array from the wrapper
+        let tools = response_json
+            .get("tools")
+            .ok_or_else(|| Error::Parse(format!("Response missing 'tools' field for {}", server_name)))?;
+        
+        // Parse the tools array
+        serde_json::from_value(tools.clone())
+            .map_err(|e| Error::Parse(format!("Failed to parse tools array for {}: {}", server_name, e)))
     }
 
     /// Call a tool on a specific server
