@@ -10,7 +10,7 @@
 //! - GATEWAY_URL: URL of your MCP gateway (e.g., https://mcp.cnctd.world)
 //! - GATEWAY_TOKEN: Bearer token for authentication (optional)
 
-use cnctd_ai::{McpGateway, Tool, tool_result_to_string};
+use cnctd_ai::{McpGateway, tool_result_to_string};
 use std::env;
 
 #[tokio::main]
@@ -39,7 +39,10 @@ async fn main() -> anyhow::Result<()> {
     println!("Found {} servers:\n", servers.len());
     
     for server in &servers {
-        println!("  • {} ({})", server.name, server.url);
+        println!("  • {}", server.name);
+        if let Some(url) = &server.url {
+            println!("    URL: {}", url);
+        }
         if let Some(desc) = &server.description {
             println!("    {}", desc);
         }
@@ -65,22 +68,8 @@ async fn main() -> anyhow::Result<()> {
             println!("  ... and {} more tools", tools.len() - 5);
         }
         
-        // Step 3: Convert rmcp tools to cnctd_ai tools
-        println!("\nStep 3: Converting to cnctd_ai Tool format...");
-        let cnctd_tools: Vec<Tool> = tools.iter().map(Tool::from).collect();
-        println!("Converted {} tools", cnctd_tools.len());
-        
-        // Validate the first tool
-        if let Some(first_tool) = cnctd_tools.first() {
-            println!("\nValidating first tool: {}", first_tool.name);
-            match first_tool.validate() {
-                Ok(_) => println!("  ✓ Tool schema is valid"),
-                Err(e) => println!("  ✗ Tool schema invalid: {}", e),
-            }
-        }
-        
-        // Step 4: Execute a tool (if available)
-        println!("\nStep 4: Example tool execution...");
+        // Step 3: Execute a tool (if available)
+        println!("\nStep 3: Example tool execution...");
         
         // Look for a simple tool to demonstrate execution
         // This is just an example - adjust based on your available tools
