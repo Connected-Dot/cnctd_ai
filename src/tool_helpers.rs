@@ -12,13 +12,13 @@ pub fn create_tool(
     
     Ok(Tool {
         name: Cow::Owned(name.to_string()),
+        title: None,
         description: Some(Cow::Owned(description.to_string())),
         input_schema: Arc::new(schema_map),
+        output_schema: None,
         annotations: None,
         icons: None,
         meta: None,
-        cache_policy: None,
-        self_ref: None,
     })
 }
 
@@ -31,12 +31,12 @@ pub fn create_tool_borrowed(
     
     Ok(Tool {
         name: Cow::Borrowed(name),
+        title: None,
         description: Some(Cow::Borrowed(description)),
         input_schema: Arc::new(schema_map),
+        output_schema: None,
         annotations: None,
         icons: None,
         meta: None,
-        cache_policy: None,
-        self_ref: None,
     })
 }
