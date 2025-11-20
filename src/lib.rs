@@ -6,6 +6,7 @@ pub mod message;
 pub mod stream;
 pub mod tool;
 pub mod mcp;
+pub mod tool_helpers;
 
 pub use client::{Client, ClientOptions, AnthropicConfig, OpenAiConfig};
 pub use error::{Error, Result};
@@ -14,6 +15,7 @@ pub use request::{CompletionRequest, RequestOptions};
 pub use tool::ToolUse;
 pub use response::{CompletionResponse, Usage, FinishReason};
 pub use stream::{CompletionStream, StreamChunk};
+pub use tool_helpers::{create_tool, create_tool_borrowed};
 
 // Re-export MCP types
 pub use mcp::{
