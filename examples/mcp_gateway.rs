@@ -67,20 +67,30 @@ async fn main() -> anyhow::Result<()> {
         if tools.len() > 5 {
             println!("  ... and {} more tools", tools.len() - 5);
         }
-        
-        // Step 3: Execute a tool (if available)
-        println!("\nStep 3: Example tool execution...");
-        
-        // Look for a simple tool to demonstrate execution
-        // This is just an example - adjust based on your available tools
-        if first_server.name == "brave-search" {
-            println!("Executing brave_web_search...");
+    }
+    
+    // Step 3: Execute a tool (find an appropriate one to demonstrate)
+    println!("\nStep 3: Example tool execution...");
+    
+    // Define some simple tools we can demonstrate with safe, read-only operations
+    let demo_tools = [
+        ("time", "get_current_time", serde_json::json!({
+            "timezone": "America/New_York"
+        })),
+        ("brave-search", "brave_web_search", serde_json::json!({
+            "query": "Rust programming language"
+        })),
+        ("github", "get_me", serde_json::json!({})),
+        ("template", "template_status", serde_json::json!({})),
+    ];
+    
+    let mut executed = false;
+    for (server_name, tool_name, arguments) in &demo_tools {
+        // Check if this server exists
+        if servers.iter().any(|s| s.name == *server_name) {
+            println!("Executing {}:{}...", server_name, tool_name);
             
-            let arguments = serde_json::json!({
-                "query": "Rust programming language"
-            });
-            
-            match gateway.call_tool(&first_server.name, "brave_web_search", Some(arguments)).await {
+            match gateway.call_tool(server_name, tool_name, Some(arguments.clone())).await {
                 Ok(result) => {
                     println!("\n✓ Tool executed successfully!");
                     println!("Is error: {}", result.is_error.unwrap_or(false));
@@ -92,16 +102,20 @@ async fn main() -> anyhow::Result<()> {
                         result_text
                     };
                     println!("Result preview:\n{}", preview);
+                    executed = true;
+                    break;
                 },
                 Err(e) => {
-                    println!("\n✗ Tool execution failed: {}", e);
+                    println!("✗ Failed to execute {}:{}: {}", server_name, tool_name, e);
+                    println!("Trying next tool...\n");
                 }
             }
-        } else {
-            println!("Skipping execution - adjust example for your available tools");
         }
-    } else {
-        println!("\nNo servers available to demonstrate tool usage");
+    }
+    
+    if !executed {
+        println!("No suitable tools found for demonstration");
+        println!("Available servers: {}", servers.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", "));
     }
     
     println!("\n=== Example Complete ===");
