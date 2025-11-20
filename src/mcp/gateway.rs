@@ -1,5 +1,3 @@
-use std::vec;
-
 use crate::{Error, Result, Tool};
 use reqwest::Client;
 use rmcp::model::{CallToolResult, RawContent};
@@ -144,15 +142,11 @@ impl McpGateway {
                 response.status()
             )));
         }
-
-        println!("Response text: {}", response.text().await.unwrap_or_default());
-
-        let tools = vec![];
         
-        // let tools: Vec<rmcp::model::Tool> = response
-        //     .json()
-        //     .await
-        //     .map_err(|e| Error::Parse(format!("Failed to parse tools for {}: {}", server_name, e)))?;
+        let tools: Vec<rmcp::model::Tool> = response
+            .json()
+            .await
+            .map_err(|e| Error::Parse(format!("Failed to parse tools for {}: {}", server_name, e)))?;
         
         Ok(tools)
     }
