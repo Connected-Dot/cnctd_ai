@@ -1,10 +1,8 @@
 use anyhow::Result;
 use cnctd_ai::{
     Client, AnthropicConfig, OpenAiConfig, Message, CompletionRequest, 
-    RequestOptions, Error
+    RequestOptions, Error, create_tool
 };
-use std::borrow::Cow;
-use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -409,7 +407,6 @@ async fn test_invalid_max_tokens_openai() {
 }
 
 async fn test_malformed_tool_anthropic() {
-    use cnctd_ai::Tool;
     use serde_json::json;
     
     let api_key = match std::env::var("ANTHROPIC_API_KEY") {
@@ -433,21 +430,17 @@ async fn test_malformed_tool_anthropic() {
         Ok(client) => {
             println!("  Test 5a: Invalid type value (caught by provider validation)");
             
-            // Create a tool with invalid schema
-            let invalid_schema = match serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
+            // Create a tool with invalid schema using helper
+            let tool = match create_tool(
+                "test_tool",
+                "A test tool",
                 json!({"type": "invalid_type"})
             ) {
-                Ok(map) => map,
+                Ok(t) => t,
                 Err(e) => {
                     println!("    Failed to create invalid schema: {}", e);
                     return;
                 }
-            };
-            
-            let tool = Tool {
-                name: Cow::Borrowed("test_tool"),
-                description: Some(Cow::Borrowed("A test tool")),
-                input_schema: Arc::new(invalid_schema),
             };
             
             let mut request = CompletionRequest {
@@ -475,20 +468,16 @@ async fn test_malformed_tool_anthropic() {
             
             println!("\n  Test 5b: Missing type field (caught by provider validation)");
             
-            let missing_type_schema = match serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
+            let tool2 = match create_tool(
+                "test_tool_2",
+                "Another test tool",
                 json!({"properties": {"name": {"type": "string"}}})
             ) {
-                Ok(map) => map,
+                Ok(t) => t,
                 Err(e) => {
                     println!("    Failed to create schema: {}", e);
                     return;
                 }
-            };
-            
-            let tool2 = Tool {
-                name: Cow::Borrowed("test_tool_2"),
-                description: Some(Cow::Borrowed("Another test tool")),
-                input_schema: Arc::new(missing_type_schema),
             };
             
             let mut request2 = CompletionRequest {
@@ -514,7 +503,6 @@ async fn test_malformed_tool_anthropic() {
 }
 
 async fn test_malformed_tool_openai() {
-    use cnctd_ai::Tool;
     use serde_json::json;
     
     let api_key = match std::env::var("OPENAI_API_KEY") {
@@ -538,20 +526,16 @@ async fn test_malformed_tool_openai() {
         Ok(client) => {
             println!("  Test 5a: Invalid type value (caught by provider validation)");
             
-            let invalid_schema = match serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
+            let tool = match create_tool(
+                "test_tool",
+                "A test tool",
                 json!({"type": "invalid_type"})
             ) {
-                Ok(map) => map,
+                Ok(t) => t,
                 Err(e) => {
                     println!("    Failed to create invalid schema: {}", e);
                     return;
                 }
-            };
-            
-            let tool = Tool {
-                name: Cow::Borrowed("test_tool"),
-                description: Some(Cow::Borrowed("A test tool")),
-                input_schema: Arc::new(invalid_schema),
             };
             
             let mut request = CompletionRequest {
@@ -577,20 +561,16 @@ async fn test_malformed_tool_openai() {
             
             println!("\n  Test 5b: Missing type field (caught by provider validation)");
             
-            let missing_type_schema = match serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
+            let tool2 = match create_tool(
+                "test_tool_2",
+                "Another test tool",
                 json!({"properties": {"name": {"type": "string"}}})
             ) {
-                Ok(map) => map,
+                Ok(t) => t,
                 Err(e) => {
                     println!("    Failed to create schema: {}", e);
                     return;
                 }
-            };
-            
-            let tool2 = Tool {
-                name: Cow::Borrowed("test_tool_2"),
-                description: Some(Cow::Borrowed("Another test tool")),
-                input_schema: Arc::new(missing_type_schema),
             };
             
             let mut request2 = CompletionRequest {
