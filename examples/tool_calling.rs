@@ -1,5 +1,7 @@
 use anyhow::Result;
 use serde_json::json;
+use std::borrow::Cow;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -27,11 +29,11 @@ async fn test_anthropic_tools() -> Result<()> {
         None,
     )?;
     
-    // Define a simple weather tool
-    let weather_tool = Tool::new(
-        "get_weather",
-        "Get the current weather for a location",
-        json!({
+    // Define a simple weather tool using rmcp::model::Tool
+    let weather_tool = Tool {
+        name: Cow::Borrowed("get_weather"),
+        description: Some(Cow::Borrowed("Get the current weather for a location")),
+        input_schema: Arc::new(serde_json::from_value(json!({
             "type": "object",
             "properties": {
                 "location": {
@@ -45,8 +47,8 @@ async fn test_anthropic_tools() -> Result<()> {
                 }
             },
             "required": ["location"]
-        })
-    );
+        }))?),
+    };
     
     let mut messages = vec![
         Message::user("What's the weather like in San Francisco?")
@@ -54,7 +56,7 @@ async fn test_anthropic_tools() -> Result<()> {
     
     let mut request = CompletionRequest {
         messages: messages.clone(),
-        tools: None,  // Initialize tools field
+        tools: None,
         options: None,
     };
     request.add_tool(weather_tool.clone());
@@ -113,10 +115,10 @@ async fn test_openai_tools() -> Result<()> {
     )?;
     
     // Same tool definition works for both providers
-    let weather_tool = Tool::new(
-        "get_weather",
-        "Get the current weather for a location",
-        json!({
+    let weather_tool = Tool {
+        name: Cow::Borrowed("get_weather"),
+        description: Some(Cow::Borrowed("Get the current weather for a location")),
+        input_schema: Arc::new(serde_json::from_value(json!({
             "type": "object",
             "properties": {
                 "location": {
@@ -130,8 +132,8 @@ async fn test_openai_tools() -> Result<()> {
                 }
             },
             "required": ["location"]
-        })
-    );
+        }))?),
+    };
     
     let mut messages = vec![
         Message::user("What's the weather like in New York?")
@@ -139,7 +141,7 @@ async fn test_openai_tools() -> Result<()> {
     
     let mut request = CompletionRequest {
         messages: messages.clone(),
-        tools: None,  // Initialize tools field
+        tools: None,
         options: None,
     };
     request.add_tool(weather_tool.clone());
