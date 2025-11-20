@@ -14,4 +14,15 @@ pub use request::{CompletionRequest, RequestOptions};
 pub use tool::{Tool, ToolUse};
 pub use response::{CompletionResponse, Usage, FinishReason};
 pub use stream::{CompletionStream, StreamChunk};
-pub use mcp::{McpGateway, ServerInfo, ListServersResponse, tool_result_to_string};
+
+// Re-export main MCP types
+pub use mcp::{
+    McpClient,
+    GatewayConfig,
+    StdioConfig,
+    CallToolResult,
+    tool_result_to_string,
+};
+
+// Legacy gateway client (still exported for backward compatibility)
+pub use mcp::{McpGateway, ListServersResponse};
