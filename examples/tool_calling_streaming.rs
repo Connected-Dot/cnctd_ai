@@ -1,7 +1,5 @@
 use anyhow::Result;
 use serde_json::json;
-use std::borrow::Cow;
-use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -16,7 +14,7 @@ async fn main() -> Result<()> {
 }
 
 async fn test_anthropic_streaming_tools() -> Result<()> {
-    use cnctd_ai::{Client, AnthropicConfig, Message, CompletionRequest, Tool};
+    use cnctd_ai::{Client, AnthropicConfig, Message, CompletionRequest, create_tool};
     
     let api_key = std::env::var("ANTHROPIC_API_KEY")?;
     
@@ -29,8 +27,10 @@ async fn test_anthropic_streaming_tools() -> Result<()> {
         None,
     )?;
     
-    // Create tool schema as a Map
-    let schema_map = match serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
+    // Define a simple weather tool using the helper function
+    let weather_tool = create_tool(
+        "get_weather",
+        "Get the current weather for a location",
         json!({
             "type": "object",
             "properties": {
@@ -46,20 +46,7 @@ async fn test_anthropic_streaming_tools() -> Result<()> {
             },
             "required": ["location"]
         })
-    ) {
-        Ok(map) => map,
-        Err(e) => {
-            eprintln!("Failed to create schema map: {}", e);
-            return Err(e.into());
-        }
-    };
-    
-    // Define a simple weather tool using rmcp::model::Tool
-    let weather_tool = Tool {
-        name: Cow::Borrowed("get_weather"),
-        description: Some(Cow::Borrowed("Get the current weather for a location")),
-        input_schema: Arc::new(schema_map),
-    };
+    )?;
     
     let mut messages = vec![
         Message::user("What's the weather like in San Francisco?")
@@ -133,7 +120,7 @@ async fn test_anthropic_streaming_tools() -> Result<()> {
 }
 
 async fn test_openai_streaming_tools() -> Result<()> {
-    use cnctd_ai::{Client, OpenAiConfig, Message, CompletionRequest, Tool};
+    use cnctd_ai::{Client, OpenAiConfig, Message, CompletionRequest, create_tool};
     
     let api_key = std::env::var("OPENAI_API_KEY")?;
     
@@ -146,8 +133,10 @@ async fn test_openai_streaming_tools() -> Result<()> {
         None,
     )?;
     
-    // Create tool schema as a Map
-    let schema_map = match serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
+    // Same tool definition works for both providers
+    let weather_tool = create_tool(
+        "get_weather",
+        "Get the current weather for a location",
         json!({
             "type": "object",
             "properties": {
@@ -163,20 +152,7 @@ async fn test_openai_streaming_tools() -> Result<()> {
             },
             "required": ["location"]
         })
-    ) {
-        Ok(map) => map,
-        Err(e) => {
-            eprintln!("Failed to create schema map: {}", e);
-            return Err(e.into());
-        }
-    };
-    
-    // Same tool definition works for both providers
-    let weather_tool = Tool {
-        name: Cow::Borrowed("get_weather"),
-        description: Some(Cow::Borrowed("Get the current weather for a location")),
-        input_schema: Arc::new(schema_map),
-    };
+    )?;
     
     let mut messages = vec![
         Message::user("What's the weather like in New York?")
