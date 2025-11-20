@@ -1,11 +1,10 @@
 use crate::{Error, Result};
 use reqwest::Client as HttpClient;
-use rmcp::model::{CallToolResult, CallToolRequestParam, ListToolsRequestParam, Tool};
+use rmcp::model::{CallToolRequestParam, CallToolResult, ListToolsRequest, Tool};
 use rmcp::service::ServiceExt;
-use rmcp::transport::TokioChildProcess;
+use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::process::Stdio;
 use tokio::process::Command;
 
 /// JSON-RPC 2.0 request structure
@@ -88,9 +87,6 @@ pub struct StdioConfig {
     pub env: Option<Vec<(String, String)>>,
 }
 
-// Type alias for the rmcp service
-type StdioService = Box<dyn rmcp::service::Service<rmcp::service::RoleClient> + Send>;
-
 /// Unified MCP client supporting both gateway and stdio transports
 pub enum McpClient {
     /// Gateway transport - communicates via HTTP with an MCP gateway
@@ -99,8 +95,11 @@ pub enum McpClient {
         http_client: HttpClient,
     },
     /// Stdio transport - spawns and communicates with a local MCP server
+    /// 
+    /// Note: The concrete service type is used here rather than a trait object
+    /// because rmcp's Service trait is not dyn-compatible
     Stdio {
-        service: StdioService,
+        service: rmcp::prelude::ClientService<TokioChildProcess>,
         config: StdioConfig,
     },
 }
@@ -156,12 +155,13 @@ impl McpClient {
     /// # }
     /// ```
     pub async fn from_stdio(config: StdioConfig) -> Result<Self> {
-        // Build the command
+        // Build the command using rmcp's ConfigureCommandExt
         let mut command = Command::new(&config.command);
-        command.args(&config.args);
-        command.stdin(Stdio::piped());
-        command.stdout(Stdio::piped());
-        command.stderr(Stdio::inherit());
+        
+        // Add arguments
+        for arg in &config.args {
+            command.arg(arg);
+        }
 
         // Add environment variables if provided
         if let Some(env_vars) = &config.env {
@@ -170,13 +170,8 @@ impl McpClient {
             }
         }
 
-        // Spawn the process
-        let child = command
-            .spawn()
-            .map_err(|e| Error::Other(format!("Failed to spawn MCP server process: {}", e)))?;
-
         // Create transport and service using rmcp's API
-        let transport = TokioChildProcess::new(child)
+        let transport = TokioChildProcess::new(command.configure(|_| {}))
             .map_err(|e| Error::Other(format!("Failed to create child process transport: {}", e)))?;
 
         let service = ().serve(transport)
@@ -184,7 +179,7 @@ impl McpClient {
             .map_err(|e| Error::Other(format!("Failed to initialize MCP service: {}", e)))?;
 
         Ok(Self::Stdio {
-            service: Box::new(service),
+            service,
             config,
         })
     }
@@ -389,9 +384,12 @@ impl McpClient {
 
     // ==================== Stdio Implementation ====================
 
-    async fn list_tools_stdio(&self, service: &StdioService) -> Result<Vec<Tool>> {
+    async fn list_tools_stdio(
+        &self,
+        service: &rmcp::prelude::ClientService<TokioChildProcess>,
+    ) -> Result<Vec<Tool>> {
         let result = service
-            .list_tools(ListToolsRequestParam::default())
+            .list_tools(ListToolsRequest::default())
             .await
             .map_err(|e| Error::Other(format!("Failed to list tools via stdio: {}", e)))?;
 
@@ -400,17 +398,26 @@ impl McpClient {
 
     async fn call_tool_stdio(
         &self,
-        service: &StdioService,
+        service: &rmcp::prelude::ClientService<TokioChildProcess>,
         tool_name: &str,
         arguments: Option<Value>,
     ) -> Result<CallToolResult> {
-        let args = arguments.unwrap_or(serde_json::json!({}));
+        // Convert Value to Map<String, Value>
+        let args_map = match arguments {
+            Some(Value::Object(map)) => Some(map),
+            Some(other) => {
+                return Err(Error::Other(format!(
+                    "Tool arguments must be a JSON object, got: {:?}",
+                    other
+                )));
+            }
+            None => None,
+        };
 
         let result = service
             .call_tool(CallToolRequestParam {
                 name: tool_name.into(),
-                arguments: Some(args),
-                _meta: None,
+                arguments: args_map,
             })
             .await
             .map_err(|e| Error::ToolExecution(format!("Tool execution failed: {}", e)))?;
