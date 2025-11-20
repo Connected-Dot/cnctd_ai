@@ -1,4 +1,5 @@
 use crate::{Error, Result};
+use crate::mcp::ServerInfo;
 use reqwest::Client as HttpClient;
 use rmcp::model::{CallToolRequestParam, CallToolResult, Tool};
 use rmcp::service::{RoleClient, RunningService, ServiceExt};
@@ -40,30 +41,10 @@ struct JsonRpcError {
     data: Option<Value>,
 }
 
-/// Information about an MCP server
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ServerInfo {
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub available_tools: Vec<Tool>,
-}
-
 /// Response from gateway's /list endpoint
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ListServersResponse {
-    servers: Vec<ServerInfoGateway>,
-}
-
-/// Gateway-specific server info (includes URL)
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct ServerInfoGateway {
-    name: String,
-    url: String,
-    description: Option<String>,
-    #[serde(default)]
-    available_tools: Vec<Tool>,
+    servers: Vec<ServerInfo>,
 }
 
 /// Configuration for connecting to an MCP server via gateway
@@ -134,12 +115,9 @@ impl StdioClient {
     }
 
     /// Get server info
-    pub fn server_info(&self) -> ServerInfo {
-        ServerInfo {
-            name: self.config.command.clone(),
-            description: None,
-            available_tools: vec![],
-        }
+    pub async fn server_info(&self) -> Result<ServerInfo> {
+        let tools = self.list_tools().await?;
+        Ok(ServerInfo::stdio(self.config.command.clone(), tools))
     }
 }
 
@@ -229,7 +207,7 @@ impl McpClient {
                 self.server_info_gateway(config, http_client).await
             }
             Self::Stdio(client) => {
-                Ok(client.server_info())
+                client.server_info().await
             }
         }
     }
@@ -358,18 +336,12 @@ impl McpClient {
             .map_err(|e| Error::Parse(format!("Failed to parse server list: {}", e)))?;
 
         // Find our server in the list
-        let server = list_response
+        list_response
             .servers
             .into_iter()
             .find(|s| s.name == config.server_name)
             .ok_or_else(|| {
                 Error::Other(format!("Server '{}' not found in gateway", config.server_name))
-            })?;
-
-        Ok(ServerInfo {
-            name: server.name,
-            description: server.description,
-            available_tools: server.available_tools,
-        })
+            })
     }
 }
