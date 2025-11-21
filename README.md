@@ -1,12 +1,13 @@
 # cnctd_ai
 
-A Rust abstraction layer for AI/LLM providers (Anthropic Claude, OpenAI) with integrated MCP (Model Context Protocol) support.
+A Rust abstraction layer for AI/LLM providers (Anthropic Claude, OpenAI) with integrated MCP (Model Context Protocol) support and autonomous agent framework.
 
 ## Features
 
 - **Multi-Provider Support**: Unified interface for Anthropic Claude and OpenAI
 - **Streaming & Non-Streaming**: Support for both regular completions and streaming responses
 - **Tool Calling**: Full support for function/tool calling with both providers
+- **Agent Framework**: Autonomous task execution with tool calling loops
 - **MCP Integration**: Native support for MCP servers (stdio and HTTP gateway)
 - **Error Handling**: Comprehensive error types with provider-specific handling
 - **Type Safety**: Strong typing with proper error handling throughout
@@ -21,6 +22,50 @@ cnctd_ai = "0.1.5"
 ```
 
 ## Quick Start
+
+### Agent Framework (NEW!)
+
+The easiest way to build autonomous AI applications:
+
+```rust
+use cnctd_ai::{Agent, Client, AnthropicConfig, McpGateway};
+
+// Setup client and gateway
+let client = Client::anthropic(
+    AnthropicConfig {
+        api_key: "your-key".into(),
+        model: "claude-sonnet-4-20250514".into(),
+        version: None,
+    },
+    None,
+)?;
+
+let gateway = McpGateway::new("https://mcp.cnctd.world");
+
+// Create agent with default settings
+let agent = Agent::new(&client).with_gateway(&gateway);
+
+// Run autonomous task - agent will use tools as needed
+let trace = agent.run_simple(
+    "Research the latest Rust async trends and summarize key findings"
+).await?;
+
+// View results
+trace.print_summary();
+```
+
+For advanced configuration:
+
+```rust
+let agent = Agent::builder(&client)
+    .max_iterations(10)
+    .max_duration(Duration::from_secs(300))
+    .system_prompt("You are a helpful research assistant.")
+    .gateway(&gateway)
+    .build();
+```
+
+See [Agent Framework Documentation](docs/AGENT_FRAMEWORK.md) for more details.
 
 ### Basic Completion
 
@@ -131,6 +176,11 @@ let result = gateway.call_tool(
 
 The repository includes several examples:
 
+**Agent Framework:**
+- `agent_simple.rs` - Minimal agent setup
+- `agent_basic.rs` - Full-featured agent with configuration
+
+**Core Functionality:**
 - `basic_completion.rs` - Simple completion example
 - `streaming.rs` - Streaming responses
 - `tool_calling.rs` - Function/tool calling
@@ -142,6 +192,7 @@ The repository includes several examples:
 Run examples with:
 
 ```bash
+cargo run --example agent_simple
 cargo run --example basic_completion
 ```
 
@@ -185,6 +236,11 @@ match client.complete(request).await {
     Err(e) => { /* handle other errors */ },
 }
 ```
+
+## Documentation
+
+- [Agent Framework Guide](docs/AGENT_FRAMEWORK.md) - Complete agent framework documentation
+- [API Documentation](https://docs.rs/cnctd_ai) - Full API reference (coming soon)
 
 ## License
 
