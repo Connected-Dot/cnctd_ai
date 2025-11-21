@@ -64,19 +64,19 @@ async fn main() -> Result<()> {
     
     // Build an agent with custom configuration
     let agent = Agent::builder(&client)
-        .max_iterations(5)  // Allow up to 5 reasoning iterations
-        .max_duration(std::time::Duration::from_secs(120))  // 2 minute timeout
-        .max_tool_result_length(2000)  // Truncate long results
+        .max_iterations(3)  // Reduced to 3 iterations to manage tokens
+        .max_duration(std::time::Duration::from_secs(60))
+        .max_tool_result_length(1500)  // More aggressive truncation
         .system_prompt("You are a helpful research assistant. Be concise and thorough.")
         .gateway(&gateway)
         .build();
     
-    // Create a request with the MCP tools
+    // Create a request with the MCP tools and lower max_tokens
     let mut request = CompletionRequest {
         messages: Vec::new(),
         tools: None,
         options: Some(RequestOptions {
-            max_tokens: Some(2048),
+            max_tokens: Some(1024),  // Reduced from 2048
             ..Default::default()
         }),
     };
