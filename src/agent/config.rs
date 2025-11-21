@@ -31,10 +31,10 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            max_iterations: 10,
-            max_duration: Some(Duration::from_secs(300)), // 5 minutes
+            max_iterations: 3,  // Reduced from 10 to be more conservative
+            max_duration: Some(Duration::from_secs(60)), // 1 minute
             stop_on_error: false,
-            max_tool_result_length: Some(4000),
+            max_tool_result_length: Some(1500),  // More aggressive truncation
             include_reasoning: true,
             system_prompt: None,
             retry_failed_tools: true,
