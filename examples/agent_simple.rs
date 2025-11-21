@@ -35,8 +35,10 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "https://mcp.cnctd.world".to_string());
     let gateway = McpGateway::new(&gateway_url);
     
-    // Create agent with default settings
-    let agent = Agent::new(&client).with_gateway(&gateway);
+    // Create agent - specify only brave-search server to keep token usage down
+    let agent = Agent::new(&client)
+        .with_gateway(&gateway)
+        .with_servers(vec!["brave-search".to_string()]);
     
     // Run a simple task
     let task = "Search for the current weather in San Francisco and tell me if I need an umbrella today.";
