@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Agent Framework**: Complete autonomous task execution system
+  - `Agent` struct with builder pattern for easy configuration
+  - `AgentConfig` for controlling behavior (iterations, timeouts, retries)
+  - `AgentExecutor` handles the autonomous tool calling loop
+  - `AgentTrace` provides comprehensive execution history
+  - `AgentState` tracks current execution state
+  - Automatic MCP tool discovery and execution
+  - Configurable error handling and retry logic
+  - Detailed event tracing for debugging and analysis
+  - Support for custom system prompts
+  - Result truncation to manage context limits
+- Added `agent` module with full framework implementation
+- Added `agent_basic.rs` example demonstrating agent usage
+- Added `agent_simple.rs` example showing minimal setup
+- Added comprehensive agent framework documentation in `docs/AGENT_FRAMEWORK.md`
+- Re-exported agent types in main library: `Agent`, `AgentConfig`, `AgentTrace`, etc.
+
+### Changed
+- Updated `lib.rs` to export new agent module
+
 ## [0.1.5] - 2025-11-20
 
 ### Fixed
