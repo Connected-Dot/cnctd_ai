@@ -10,7 +10,7 @@
 
 use anyhow::Result;
 use cnctd_ai::{
-    Agent, Client, McpGateway, OpenAiConfig,
+    Agent, Client, CompletionRequest, McpGateway, OpenAiConfig, RequestOptions,
 };
 use std::env;
 
@@ -41,17 +41,37 @@ async fn main() -> Result<()> {
         McpGateway::new(&gateway_url)
     };
     
-    // Create agent - specify only brave-search server to keep token usage down
-    let agent = Agent::new(&client)
-        .with_gateway(&gateway)
-        .with_servers(vec!["brave-search".to_string()]);
+    // Get brave-search tools
+    let tools = gateway.list_tools("brave-search").await?;
     
-    // Run a simple task
+    // Build agent with custom configuration
+    let agent = Agent::builder(&client)
+        .max_iterations(3)
+        .max_tool_result_length(3000)  // Increased to keep more context
+        .system_prompt("You are a helpful assistant. When you use search tools, make sure to actually read and use the results to answer the user's question directly.")
+        .gateway(&gateway)
+        .build();
+    
+    // Create request with tools
+    let mut request = CompletionRequest {
+        messages: Vec::new(),
+        tools: None,
+        options: Some(RequestOptions {
+            max_tokens: Some(2048),
+            ..Default::default()
+        }),
+    };
+    
+    for tool in tools {
+        request.add_tool(tool);
+    }
+    
+    // Run the task
     let task = "Search for the current weather in San Francisco and tell me if I need an umbrella today.";
     
     println!("Task: {}\n", task);
     
-    let trace = agent.run_simple(task).await?;
+    let trace = agent.run(task, request).await?;
     
     // Print detailed trace to see what happened
     trace.print_detailed();
