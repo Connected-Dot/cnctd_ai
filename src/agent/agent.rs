@@ -1,4 +1,4 @@
-use crate::{Client, CompletionRequest, Error};
+use crate::{Client, CompletionRequest, Error, RequestOptions};
 use crate::mcp::McpGateway;
 
 use super::{AgentConfig, AgentConfigBuilder, AgentExecutor, AgentTrace};
@@ -65,7 +65,10 @@ impl<'a> Agent<'a> {
         let mut request = CompletionRequest {
             messages: Vec::new(),
             tools: None,
-            options: None,
+            options: Some(RequestOptions {
+                max_tokens: Some(1024),  // Reasonable default for simple tasks
+                ..Default::default()
+            }),
         };
         
         // Auto-discover and load tools from gateway if available
