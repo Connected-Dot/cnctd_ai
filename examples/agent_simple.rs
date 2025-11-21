@@ -47,8 +47,8 @@ async fn main() -> Result<()> {
     
     let trace = agent.run_simple(task).await?;
     
-    // Print summary
-    trace.print_summary();
+    // Print detailed trace to see what happened
+    trace.print_detailed();
     
     Ok(())
 }
