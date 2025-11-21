@@ -8,6 +8,7 @@ pub struct Agent<'a> {
     client: &'a Client,
     config: AgentConfig,
     gateway: Option<&'a McpGateway>,
+    servers: Option<Vec<String>>,
 }
 
 impl<'a> Agent<'a> {
@@ -17,6 +18,7 @@ impl<'a> Agent<'a> {
             client,
             config: AgentConfig::default(),
             gateway: None,
+            servers: None,
         }
     }
     
@@ -26,6 +28,7 @@ impl<'a> Agent<'a> {
             client,
             config,
             gateway: None,
+            servers: None,
         }
     }
     
@@ -40,6 +43,12 @@ impl<'a> Agent<'a> {
         self
     }
     
+    /// Set specific servers to load tools from (if not set, loads all servers)
+    pub fn with_servers(mut self, servers: Vec<String>) -> Self {
+        self.servers = Some(servers);
+        self
+    }
+    
     /// Run the agent with a task
     pub async fn run(
         &self,
@@ -51,7 +60,7 @@ impl<'a> Agent<'a> {
     }
     
     /// Run the agent with a simple task (no pre-configured request)
-    /// If a gateway is configured, automatically loads all available tools
+    /// If a gateway is configured, automatically loads tools from specified servers
     pub async fn run_simple(&self, task: impl Into<String>) -> Result<AgentTrace, Error> {
         let mut request = CompletionRequest {
             messages: Vec::new(),
@@ -61,12 +70,23 @@ impl<'a> Agent<'a> {
         
         // Auto-discover and load tools from gateway if available
         if let Some(gateway) = self.gateway {
-            if let Ok(servers) = gateway.list_servers().await {
-                for server in servers {
-                    if let Ok(tools) = gateway.list_tools(&server.name).await {
-                        for tool in tools {
-                            request.add_tool(tool);
-                        }
+            let servers_to_load = if let Some(servers) = &self.servers {
+                // Load only specified servers
+                servers.clone()
+            } else {
+                // Load all servers
+                gateway.list_servers()
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|s| s.name)
+                    .collect()
+            };
+            
+            for server_name in servers_to_load {
+                if let Ok(tools) = gateway.list_tools(&server_name).await {
+                    for tool in tools {
+                        request.add_tool(tool);
                     }
                 }
             }
@@ -81,6 +101,7 @@ pub struct AgentBuilder<'a> {
     client: &'a Client,
     config_builder: AgentConfigBuilder,
     gateway: Option<&'a McpGateway>,
+    servers: Option<Vec<String>>,
 }
 
 impl<'a> AgentBuilder<'a> {
@@ -89,6 +110,7 @@ impl<'a> AgentBuilder<'a> {
             client,
             config_builder: AgentConfigBuilder::new(),
             gateway: None,
+            servers: None,
         }
     }
     
@@ -147,11 +169,17 @@ impl<'a> AgentBuilder<'a> {
         self
     }
     
+    pub fn servers(mut self, servers: Vec<String>) -> Self {
+        self.servers = Some(servers);
+        self
+    }
+    
     pub fn build(self) -> Agent<'a> {
         Agent {
             client: self.client,
             config: self.config_builder.build(),
             gateway: self.gateway,
+            servers: self.servers,
         }
     }
 }
