@@ -51,12 +51,26 @@ impl<'a> Agent<'a> {
     }
     
     /// Run the agent with a simple task (no pre-configured request)
+    /// If a gateway is configured, automatically loads all available tools
     pub async fn run_simple(&self, task: impl Into<String>) -> Result<AgentTrace, Error> {
-        let request = CompletionRequest {
+        let mut request = CompletionRequest {
             messages: Vec::new(),
             tools: None,
             options: None,
         };
+        
+        // Auto-discover and load tools from gateway if available
+        if let Some(gateway) = self.gateway {
+            if let Ok(servers) = gateway.list_servers().await {
+                for server in servers {
+                    if let Ok(tools) = gateway.list_tools(&server.name).await {
+                        for tool in tools {
+                            request.add_tool(tool);
+                        }
+                    }
+                }
+            }
+        }
         
         self.run(task, request).await
     }
