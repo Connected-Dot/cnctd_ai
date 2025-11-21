@@ -7,6 +7,7 @@ pub mod stream;
 pub mod tool;
 pub mod mcp;
 pub mod tool_helpers;
+pub mod agent;
 
 pub use client::{Client, ClientOptions, AnthropicConfig, OpenAiConfig};
 pub use error::{Error, Result};
@@ -25,6 +26,18 @@ pub use mcp::{
     ServerInfo,
     CallToolResult,
     tool_result_to_string,
+};
+
+// Re-export agent types
+pub use agent::{
+    Agent,
+    AgentConfig,
+    AgentConfigBuilder,
+    AgentTrace,
+    TraceEvent,
+    ToolExecution,
+    AgentState,
+    StopReason,
 };
 
 // Re-export Tool from rmcp (replaces custom Tool struct)
