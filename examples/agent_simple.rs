@@ -6,6 +6,7 @@
 //! Set these environment variables:
 //! - ANTHROPIC_API_KEY: Your Anthropic API key
 //! - GATEWAY_URL: URL of your MCP gateway (optional, defaults to https://mcp.cnctd.world)
+//! - GATEWAY_TOKEN: Bearer token for gateway authentication (optional)
 
 use anyhow::Result;
 use cnctd_ai::{
@@ -30,10 +31,15 @@ async fn main() -> Result<()> {
         None,
     )?;
     
-    // Setup MCP gateway
+    // Setup MCP gateway with optional authentication
     let gateway_url = env::var("GATEWAY_URL")
         .unwrap_or_else(|_| "https://mcp.cnctd.world".to_string());
-    let gateway = McpGateway::new(&gateway_url);
+    
+    let gateway = if let Ok(token) = env::var("GATEWAY_TOKEN") {
+        McpGateway::with_auth(&gateway_url, token)
+    } else {
+        McpGateway::new(&gateway_url)
+    };
     
     // Create agent - specify only brave-search server to keep token usage down
     let agent = Agent::new(&client)
