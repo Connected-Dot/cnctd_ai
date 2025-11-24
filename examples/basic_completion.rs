@@ -9,6 +9,9 @@ async fn main() -> Result<()> {
     println!("\n=== Testing OpenAI ===");
     test_openai().await?;
     
+    println!("\n=== Testing Gemini ===");
+    test_gemini().await?;
+    
     Ok(())
 }
 
@@ -56,6 +59,39 @@ async fn test_openai() -> Result<()> {
             api_key,
             model: "gpt-4o".into(),
             organization: None,
+        },
+        None, // use default ClientOptions
+    )?;
+    
+    let request = CompletionRequest {
+        messages: vec![Message::user("What is Rust?")],
+        tools: None,
+        options: None,
+    };
+    
+    let response = client.complete(request).await?;
+    
+    println!("Model: {}", response.model);
+    println!("Response: {}", response.text());
+    println!("Usage: {} prompt + {} completion = {} total tokens",
+        response.usage.prompt_tokens,
+        response.usage.completion_tokens,
+        response.usage.total_tokens
+    );
+    println!("Finish reason: {:?}", response.finish_reason);
+    
+    Ok(())
+}
+
+async fn test_gemini() -> Result<()> {
+    use cnctd_ai::{Client, GeminiConfig, Message, CompletionRequest};
+    
+    let api_key = std::env::var("GEMINI_API_KEY")?;
+    
+    let client = Client::gemini(
+        GeminiConfig {
+            api_key,
+            model: "gemini-2.0-flash".into(),
         },
         None, // use default ClientOptions
     )?;
