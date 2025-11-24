@@ -9,7 +9,7 @@ pub mod mcp;
 pub mod tool_helpers;
 pub mod agent;
 
-pub use client::{Client, ClientOptions, AnthropicConfig, OpenAiConfig};
+pub use client::{Client, ClientOptions, AnthropicConfig, OpenAiConfig, GeminiConfig};
 pub use error::{Error, Result};
 pub use message::{Message, Role};
 pub use request::{CompletionRequest, RequestOptions};
