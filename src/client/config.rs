@@ -11,3 +11,9 @@ pub struct OpenAiConfig {
     pub model: String,
     pub organization: Option<String>,
 }
+
+#[derive(Clone, Debug)]
+pub struct GeminiConfig {
+    pub api_key: String,
+    pub model: String,
+}
