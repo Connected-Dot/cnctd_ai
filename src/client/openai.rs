@@ -5,7 +5,7 @@ use crate::stream::CompletionStream;
 use super::config::OpenAiConfig;
 
 pub(super) async fn complete(
-    sdk_client: &async_openai::Client&lt;async_openai::config::OpenAIConfig&gt;,
+    sdk_client: &async_openai::Client<async_openai::config::OpenAIConfig>,
     config: &OpenAiConfig,
     request: &CompletionRequest,
 ) -> Result<CompletionResponse> {
@@ -172,7 +172,7 @@ pub(super) async fn complete(
 }
 
 pub(super) async fn stream(
-    sdk_client: &async_openai::Client&lt;async_openai::config::OpenAIConfig&gt;,
+    sdk_client: &async_openai::Client<async_openai::config::OpenAIConfig>,
     config: &OpenAiConfig,
     request: &CompletionRequest,
 ) -> Result<CompletionStream> {
