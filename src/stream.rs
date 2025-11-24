@@ -61,12 +61,28 @@ impl CompletionStream {
         }
     }
 
+    /// Create a new stream from a raw HTTP byte stream for Gemini
+    pub fn gemini_custom(
+        stream: impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
+        model: String,
+    ) -> Self {
+        let event_stream = stream.eventsource();
+        Self {
+            inner: StreamType::GeminiCustom(Box::pin(event_stream)),
+            model,
+            accumulated_text: String::new(),
+            usage: None,
+            finish_reason: None,
+            tool_uses: Vec::new(),
+        }
+    }
+
     /// Get the next chunk from the stream
     pub async fn next(&mut self) -> Option<Result<StreamChunk, crate::error::Error>> {
         loop {
-            let event = match &mut self.inner {
+            match &mut self.inner {
                 StreamType::AnthropicCustom(stream) => {
-                    match stream.next().await {
+                    let event = match stream.next().await {
                         Some(Ok(event)) => event,
                         Some(Err(e)) => {
                             return Some(Err(crate::error::Error::Other(
@@ -74,7 +90,12 @@ impl CompletionStream {
                             )));
                         }
                         None => return None,
+                    };
+                    // Parse the SSE event
+                    if let Some(chunk) = self.handle_anthropic_sse_event(event).await? {
+                        return Some(Ok(chunk));
                     }
+                    // If no chunk returned, continue to next event
                 }
                 StreamType::OpenAi(stream) => {
                     match stream.next().await {
@@ -168,14 +189,24 @@ impl CompletionStream {
                         None => return None,
                     }
                 }
-            };
-            // Parse the SSE event
-            if let Some(chunk) = self.handle_anthropic_sse_event(event).await? {
-                return Some(Ok(chunk));
+                StreamType::GeminiCustom(stream) => {
+                    let event = match stream.next().await {
+                        Some(Ok(event)) => event,
+                        Some(Err(e)) => {
+                            return Some(Err(crate::error::Error::GeminiError(
+                                format!("Stream error: {}", e)
+                            )));
+                        }
+                        None => return None,
+                    };
+                    // Parse the SSE event
+                    if let Some(chunk) = self.handle_gemini_sse_event(event).await? {
+                        return Some(Ok(chunk));
+                    }
+                    // If no chunk returned, continue to next event
+                }
             }
-            // If no chunk returned, continue to next event
         }
-        
     }
 
     async fn handle_openai_chunk(
@@ -330,6 +361,7 @@ impl CompletionStream {
                         "end_turn" => crate::response::FinishReason::Stop,
                         "max_tokens" => crate::response::FinishReason::Length,
                         "stop_sequence" => crate::response::FinishReason::Stop,
+                        "tool_use" => crate::response::FinishReason::ToolUse,
                         _ => crate::response::FinishReason::Other,
                     });
                 }
@@ -344,6 +376,109 @@ impl CompletionStream {
                 Some(None)
             }
         }
+    }
+
+    /// Handle Gemini SSE events
+    /// 
+    /// Gemini streaming format:
+    /// - Each SSE data line contains a JSON object with candidates array
+    /// - candidates[0].content.parts contains text or functionCall objects
+    /// - usageMetadata contains token counts
+    /// - candidates[0].finishReason indicates completion
+    async fn handle_gemini_sse_event(
+        &mut self,
+        event: eventsource_stream::Event,
+    ) -> Option<Option<StreamChunk>> {
+        // Parse the event data as JSON
+        let data = match serde_json::from_str::<serde_json::Value>(&event.data) {
+            Ok(data) => data,
+            Err(_) => return Some(None), // Skip unparseable events
+        };
+
+        // Extract candidate content
+        let candidate = match data["candidates"].get(0) {
+            Some(c) => c,
+            None => return Some(None), // No candidate yet
+        };
+
+        // Extract parts from content
+        let parts = match candidate["content"]["parts"].as_array() {
+            Some(p) => p,
+            None => return Some(None), // No parts
+        };
+
+        let mut text_delta = String::new();
+        
+        for part in parts {
+            // Handle text content
+            if let Some(text) = part["text"].as_str() {
+                text_delta.push_str(text);
+            }
+            
+            // Handle function calls
+            if let Some(function_call) = part["functionCall"].as_object() {
+                let name = function_call["name"].as_str().unwrap_or("").to_string();
+                let args = function_call.get("args").cloned().unwrap_or(serde_json::json!({}));
+                
+                // Generate a unique ID (Gemini doesn't provide one)
+                let id = format!("gemini_call_{}", uuid::Uuid::new_v4());
+                
+                self.tool_uses.push(crate::tool::ToolUse {
+                    id,
+                    name,
+                    input: args,
+                });
+            }
+        }
+
+        // Update usage if present
+        if let Some(usage_metadata) = data.get("usageMetadata") {
+            let prompt_tokens = usage_metadata["promptTokenCount"].as_u64().unwrap_or(0) as u32;
+            let completion_tokens = usage_metadata["candidatesTokenCount"].as_u64().unwrap_or(0) as u32;
+            let total_tokens = usage_metadata["totalTokenCount"].as_u64().unwrap_or(0) as u32;
+            self.usage = Some(crate::response::Usage {
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+            });
+        }
+
+        // Check for finish reason
+        if let Some(finish_reason_str) = candidate["finishReason"].as_str() {
+            self.finish_reason = Some(match finish_reason_str {
+                "STOP" => crate::response::FinishReason::Stop,
+                "MAX_TOKENS" => crate::response::FinishReason::Length,
+                "SAFETY" => crate::response::FinishReason::ContentFilter,
+                "RECITATION" => crate::response::FinishReason::ContentFilter,
+                _ => {
+                    // Check if we have tool uses
+                    if !self.tool_uses.is_empty() {
+                        crate::response::FinishReason::ToolUse
+                    } else {
+                        crate::response::FinishReason::Other
+                    }
+                }
+            });
+        }
+
+        // Accumulate text
+        if !text_delta.is_empty() {
+            self.accumulated_text.push_str(&text_delta);
+            return Some(Some(StreamChunk {
+                delta: Some(text_delta),
+                finish_reason: None,
+            }));
+        }
+
+        // If we have tool uses or finish reason but no text, still return a chunk
+        if !self.tool_uses.is_empty() || self.finish_reason.is_some() {
+            return Some(Some(StreamChunk {
+                delta: None,
+                finish_reason: self.finish_reason.clone(),
+            }));
+        }
+
+        Some(None) // Continue to next event
     }
 
     /// Get the final response after streaming completes
@@ -392,4 +527,12 @@ enum StreamType {
         >
     ),
     OpenAi(async_openai::types::ChatCompletionResponseStream),
+    GeminiCustom(
+        std::pin::Pin<
+            Box<
+                dyn futures::Stream<Item = Result<eventsource_stream::Event, eventsource_stream::EventStreamError<reqwest::Error>>>
+                    + Send
+            >
+        >
+    ),
 }
