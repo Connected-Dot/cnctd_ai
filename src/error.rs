@@ -38,6 +38,9 @@ pub enum Error {
     #[error("OpenAI SDK error: {0}")]
     OpenAiError(#[from] async_openai::error::OpenAIError),
     
+    #[error("Gemini API error: {0}")]
+    GeminiError(String),
+    
     #[error("JSON error: {0}")]
     JsonError(#[from] serde_json::Error),
     
@@ -98,6 +101,32 @@ impl Error {
             // Fallback to generic Anthropic error
             Error::AnthropicError(error_msg)
         }
+    }
+    
+    /// Parse a Gemini error string to classify error type
+    pub fn from_gemini_error(error_msg: String) -> Self {
+        // Check for authentication errors
+        if error_msg.to_lowercase().contains("api key")
+            || error_msg.contains("401")
+            || error_msg.contains("403") {
+            return Error::AuthenticationFailed(error_msg);
+        }
+        
+        // Check for rate limiting
+        if error_msg.to_lowercase().contains("rate limit")
+            || error_msg.to_lowercase().contains("quota")
+            || error_msg.contains("429") {
+            return Error::RateLimited { retry_after: None };
+        }
+        
+        // Check for validation errors
+        if error_msg.to_lowercase().contains("invalid")
+            || error_msg.contains("400") {
+            return Error::InvalidRequest(error_msg);
+        }
+        
+        // Fallback to generic Gemini error
+        Error::GeminiError(error_msg)
     }
 }
 
