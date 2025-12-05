@@ -228,10 +228,10 @@ fn parse_status(status: &str) -> BatchStatus {
     }
 }
 
-fn parse_datetime(s: &str) -> DateTime<Utc> {
+fn parse_datetime(s: &str) -> Option<i64> {
     DateTime::parse_from_rfc3339(s)
-        .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or_else(|_| Utc::now())
+        .map(|dt| dt.with_timezone(&Utc).timestamp())
+        .ok()
 }
 
 fn convert_batch_response(resp: AnthropicBatchResponse) -> BatchInfo {
@@ -242,15 +242,14 @@ fn convert_batch_response(resp: AnthropicBatchResponse) -> BatchInfo {
         id: resp.id,
         status: parse_status(&resp.processing_status),
         created_at: parse_datetime(&resp.created_at),
-        completed_at: resp.ended_at.map(|s| parse_datetime(&s)),
-        expires_at: Some(parse_datetime(&resp.expires_at)),
-        counts: BatchCounts {
+        completed_at: resp.ended_at.as_ref().and_then(|s| parse_datetime(s)),
+        expires_at: parse_datetime(&resp.expires_at),
+        counts: Some(BatchCounts {
             total,
             completed: counts.succeeded,
             failed: counts.errored + counts.canceled + counts.expired,
-            in_progress: counts.processing,
-        },
-        provider: "anthropic".to_string(),
+        }),
+        error_message: None,
     }
 }
 
