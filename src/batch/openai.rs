@@ -333,7 +333,7 @@ fn parse_completion_from_body(body: &serde_json::Value) -> Result<crate::respons
     };
 
     // Parse tool calls if present
-    let tool_uses = body
+    let tool_uses: Vec<crate::ToolUse> = body
         .get("choices")
         .and_then(|c| c.get(0))
         .and_then(|c| c.get("message"))
