@@ -312,16 +312,25 @@ fn parse_completion_from_body(body: &serde_json::Value) -> Result<crate::respons
         .and_then(|r| r.as_str())
         .map(|r| match r {
             "stop" => crate::response::FinishReason::Stop,
-            "length" => crate::response::FinishReason::MaxTokens,
+            "length" => crate::response::FinishReason::Length,
             "tool_calls" => crate::response::FinishReason::ToolUse,
             _ => crate::response::FinishReason::Stop,
         })
         .unwrap_or(crate::response::FinishReason::Stop);
 
-    let usage = body.get("usage").map(|u| crate::response::Usage {
-        input_tokens: u.get("prompt_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
-        output_tokens: u.get("completion_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
-    });
+    let prompt_tokens = body.get("usage")
+        .and_then(|u| u.get("prompt_tokens"))
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0) as u32;
+    let completion_tokens = body.get("usage")
+        .and_then(|u| u.get("completion_tokens"))
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0) as u32;
+    let usage = crate::response::Usage {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens: prompt_tokens + completion_tokens,
+    };
 
     // Parse tool calls if present
     let tool_uses = body
@@ -349,16 +358,23 @@ fn parse_completion_from_body(body: &serde_json::Value) -> Result<crate::respons
         })
         .unwrap_or_default();
 
+    let tool_uses_opt = if tool_uses.is_empty() { None } else { Some(tool_uses.clone()) };
+    
     Ok(crate::response::CompletionResponse {
-        content,
-        finish_reason,
+        message: crate::message::Message {
+            role: crate::message::Role::Assistant,
+            content,
+            tool_uses: tool_uses_opt.clone(),
+            tool_call_id: None,
+        },
         usage,
-        tool_uses,
+        finish_reason,
         model: body
             .get("model")
             .and_then(|m| m.as_str())
             .unwrap_or("unknown")
             .to_string(),
+        tool_uses: tool_uses_opt,
     })
 }
 
