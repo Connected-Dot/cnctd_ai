@@ -44,6 +44,9 @@ pub enum Error {
     #[error("JSON error: {0}")]
     JsonError(#[from] serde_json::Error),
     
+    #[error("Unsupported operation: {0}")]
+    UnsupportedOperation(String),
+    
     #[error("{0}")]
     Other(String),
 }

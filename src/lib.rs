@@ -8,6 +8,7 @@ pub mod tool;
 pub mod mcp;
 pub mod tool_helpers;
 pub mod agent;
+pub mod batch;
 
 pub use client::{Client, ClientOptions, AnthropicConfig, OpenAiConfig, GeminiConfig};
 pub use error::{Error, Result};
@@ -38,6 +39,18 @@ pub use agent::{
     ToolExecution,
     AgentState,
     StopReason,
+};
+
+// Re-export batch types
+pub use batch::{
+    BatchItem,
+    BatchInfo,
+    BatchStatus,
+    BatchCounts,
+    BatchResult,
+    BatchResultType,
+    BatchItemError,
+    BatchAwaitOptions,
 };
 
 // Re-export Tool from rmcp (replaces custom Tool struct)
