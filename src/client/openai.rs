@@ -170,6 +170,7 @@ pub(super) async fn complete(
         finish_reason,
         model: response.model,
         tool_uses: tool_uses_opt,
+        grounding_metadata: None,
     })
 }
 

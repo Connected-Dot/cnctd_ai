@@ -477,6 +477,7 @@ fn convert_result_line(line: AnthropicBatchResultLine) -> BatchResult {
                 finish_reason,
                 model: msg.model,
                 tool_uses: tool_uses_opt,
+                grounding_metadata: None,
             })
         } else {
             BatchResultType::Error(BatchItemError {

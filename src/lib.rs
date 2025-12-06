@@ -14,9 +14,12 @@ pub mod embeddings;
 pub use client::{Client, ClientOptions, AnthropicConfig, OpenAiConfig, GeminiConfig};
 pub use error::{Error, Result};
 pub use message::{Message, Role};
-pub use request::{CompletionRequest, RequestOptions};
+pub use request::{CompletionRequest, RequestOptions, BuiltInTool};
 pub use tool::ToolUse;
-pub use response::{CompletionResponse, Usage, FinishReason};
+pub use response::{
+    CompletionResponse, Usage, FinishReason,
+    GroundingMetadata, GroundingChunk, GroundingSupport, WebChunk, SearchEntryPoint,
+};
 pub use stream::{CompletionStream, StreamChunk};
 pub use tool_helpers::{create_tool, create_tool_borrowed};
 

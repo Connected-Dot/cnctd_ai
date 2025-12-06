@@ -375,6 +375,7 @@ fn parse_completion_from_body(body: &serde_json::Value) -> Result<crate::respons
             .unwrap_or("unknown")
             .to_string(),
         tool_uses: tool_uses_opt,
+        grounding_metadata: None,
     })
 }
 

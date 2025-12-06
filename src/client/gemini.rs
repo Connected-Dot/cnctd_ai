@@ -1,6 +1,6 @@
 use crate::error::Result;
-use crate::request::CompletionRequest;
-use crate::response::CompletionResponse;
+use crate::request::{CompletionRequest, BuiltInTool};
+use crate::response::{CompletionResponse, GroundingMetadata};
 use crate::stream::CompletionStream;
 use super::config::GeminiConfig;
 
@@ -30,12 +30,6 @@ pub(super) async fn complete(
                 // Check if this is a tool result message
                 if let Some(_tool_call_id) = &msg.tool_call_id {
                     // Gemini uses functionResponse for tool results
-                    // The tool name should be extracted from the message or stored separately
-                    // For now, we'll try to parse it from the message or use a placeholder
-                    // In practice, the caller should set up the message with the tool name
-                    
-                    // Try to parse the content as JSON to extract the tool name
-                    // If the content contains the tool name, use it; otherwise use a generic approach
                     let function_name = msg.tool_uses.as_ref()
                         .and_then(|uses| uses.first())
                         .map(|u| u.name.clone())
@@ -99,7 +93,10 @@ pub(super) async fn complete(
     }
     body["contents"] = serde_json::json!(contents);
     
-    // Add tools if present
+    // Build tools array (function declarations + built-in tools)
+    let mut tools_array: Vec<serde_json::Value> = Vec::new();
+    
+    // Add MCP function declarations if present
     if let Some(tools) = &request.tools {
         let function_declarations: Vec<_> = tools.iter().map(|tool| {
             serde_json::json!({
@@ -109,9 +106,41 @@ pub(super) async fn complete(
             })
         }).collect();
         
-        body["tools"] = serde_json::json!([{
+        tools_array.push(serde_json::json!({
             "functionDeclarations": function_declarations
-        }]);
+        }));
+    }
+    
+    // Add built-in tools if present
+    if let Some(built_in_tools) = &request.built_in_tools {
+        for tool in built_in_tools {
+            match tool {
+                BuiltInTool::GoogleSearch => {
+                    // Gemini 2.0+ format
+                    tools_array.push(serde_json::json!({
+                        "googleSearch": {}
+                    }));
+                }
+                BuiltInTool::GoogleSearchRetrieval { dynamic_threshold } => {
+                    // Gemini 1.5 legacy format
+                    let mut config = serde_json::json!({
+                        "mode": "MODE_DYNAMIC"
+                    });
+                    if let Some(threshold) = dynamic_threshold {
+                        config["dynamicThreshold"] = serde_json::json!(threshold);
+                    }
+                    tools_array.push(serde_json::json!({
+                        "googleSearchRetrieval": {
+                            "dynamicRetrievalConfig": config
+                        }
+                    }));
+                }
+            }
+        }
+    }
+    
+    if !tools_array.is_empty() {
+        body["tools"] = serde_json::json!(tools_array);
     }
     
     // Add generation config
@@ -236,6 +265,10 @@ pub(super) async fn complete(
         }
     };
     
+    // Extract grounding metadata if present
+    let grounding_metadata = candidate.get("groundingMetadata")
+        .and_then(|gm| serde_json::from_value::<GroundingMetadata>(gm.clone()).ok());
+    
     let message = crate::message::Message {
         role: crate::message::Role::Assistant,
         content,
@@ -249,6 +282,7 @@ pub(super) async fn complete(
         finish_reason,
         model: config.model.clone(),
         tool_uses: tool_uses_opt,
+        grounding_metadata,
     })
 }
 
@@ -334,7 +368,10 @@ pub(super) async fn stream(
     }
     body["contents"] = serde_json::json!(contents);
     
-    // Add tools if present
+    // Build tools array (function declarations + built-in tools)
+    let mut tools_array: Vec<serde_json::Value> = Vec::new();
+    
+    // Add MCP function declarations if present
     if let Some(tools) = &request.tools {
         let function_declarations: Vec<_> = tools.iter().map(|tool| {
             serde_json::json!({
@@ -344,9 +381,39 @@ pub(super) async fn stream(
             })
         }).collect();
         
-        body["tools"] = serde_json::json!([{
+        tools_array.push(serde_json::json!({
             "functionDeclarations": function_declarations
-        }]);
+        }));
+    }
+    
+    // Add built-in tools if present
+    if let Some(built_in_tools) = &request.built_in_tools {
+        for tool in built_in_tools {
+            match tool {
+                BuiltInTool::GoogleSearch => {
+                    tools_array.push(serde_json::json!({
+                        "googleSearch": {}
+                    }));
+                }
+                BuiltInTool::GoogleSearchRetrieval { dynamic_threshold } => {
+                    let mut config = serde_json::json!({
+                        "mode": "MODE_DYNAMIC"
+                    });
+                    if let Some(threshold) = dynamic_threshold {
+                        config["dynamicThreshold"] = serde_json::json!(threshold);
+                    }
+                    tools_array.push(serde_json::json!({
+                        "googleSearchRetrieval": {
+                            "dynamicRetrievalConfig": config
+                        }
+                    }));
+                }
+            }
+        }
+    }
+    
+    if !tools_array.is_empty() {
+        body["tools"] = serde_json::json!(tools_array);
     }
     
     // Add generation config

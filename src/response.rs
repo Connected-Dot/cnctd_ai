@@ -9,6 +9,9 @@ pub struct CompletionResponse {
     pub model: String,
     #[serde(skip)]
     pub tool_uses: Option<Vec<ToolUse>>,
+    /// Grounding metadata from search-enabled responses (Gemini)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grounding_metadata: Option<GroundingMetadata>,
 }
 
 impl CompletionResponse {
@@ -19,6 +22,21 @@ impl CompletionResponse {
 
     pub fn tool_use(&self) -> Option<&ToolUse> {
         self.tool_uses.as_ref()?.first()
+    }
+
+    /// Check if response was grounded with search results
+    pub fn is_grounded(&self) -> bool {
+        self.grounding_metadata.is_some()
+    }
+
+    /// Get search queries used for grounding (if any)
+    pub fn search_queries(&self) -> Option<&Vec<String>> {
+        self.grounding_metadata.as_ref()?.web_search_queries.as_ref()
+    }
+
+    /// Get grounding sources/citations (if any)
+    pub fn sources(&self) -> Option<&Vec<GroundingChunk>> {
+        self.grounding_metadata.as_ref()?.grounding_chunks.as_ref()
     }
 }
 
@@ -38,4 +56,64 @@ pub enum FinishReason {
     ToolUse,
     #[serde(other)]
     Other,
+}
+
+/// Metadata about search grounding from Gemini
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroundingMetadata {
+    /// Search queries that were executed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_search_queries: Option<Vec<String>>,
+    /// Search entry point with HTML/CSS for rendering
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_entry_point: Option<SearchEntryPoint>,
+    /// Source chunks used for grounding
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grounding_chunks: Option<Vec<GroundingChunk>>,
+    /// Mapping of response text to source chunks
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grounding_supports: Option<Vec<GroundingSupport>>,
+}
+
+/// Search entry point for rendering search suggestions
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchEntryPoint {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rendered_content: Option<String>,
+}
+
+/// A source chunk from web search
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct GroundingChunk {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web: Option<WebChunk>,
+}
+
+/// Web source information
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct WebChunk {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// Links response text segments to source chunks
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroundingSupport {
+    /// Start index in response text
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_index: Option<u32>,
+    /// End index in response text
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_index: Option<u32>,
+    /// Indices into grounding_chunks array
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grounding_chunk_indices: Option<Vec<u32>>,
+    /// Confidence scores for each chunk
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence_scores: Option<Vec<f32>>,
 }

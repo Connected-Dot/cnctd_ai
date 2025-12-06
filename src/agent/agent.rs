@@ -65,6 +65,7 @@ impl<'a> Agent<'a> {
         let mut request = CompletionRequest {
             messages: Vec::new(),
             tools: None,
+            built_in_tools: None,
             options: Some(RequestOptions {
                 max_tokens: Some(1024),  // Reasonable default for simple tasks
                 ..Default::default()

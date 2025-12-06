@@ -509,6 +509,7 @@ impl CompletionStream {
             finish_reason: self.finish_reason.clone().unwrap_or(crate::response::FinishReason::Other),
             model: self.model.clone(),
             tool_uses: tool_uses_opt,
+            grounding_metadata: None,
         })
     }
 
