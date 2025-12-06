@@ -105,6 +105,50 @@ impl Client {
     }
 
     // =========================================================================
+    // Embedding API methods
+    // =========================================================================
+
+    /// Generate embeddings for text input.
+    ///
+    /// Currently only supported by OpenAI provider.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use cnctd_ai::{embed_small, EmbeddingRequest};
+    ///
+    /// // Using convenience function
+    /// let response = client.embed(embed_small("Hello, world!")).await?;
+    ///
+    /// // Using explicit request
+    /// let request = EmbeddingRequest::new("Hello, world!", "text-embedding-3-small");
+    /// let response = client.embed(request).await?;
+    ///
+    /// // Access the embedding vector
+    /// let vector = &response.embeddings[0].vector;
+    /// ```
+    pub async fn embed(
+        &self,
+        request: crate::embeddings::EmbeddingRequest,
+    ) -> Result<crate::embeddings::EmbeddingResponse> {
+        match &self.provider {
+            ProviderType::OpenAi { sdk_client, config } => {
+                crate::embeddings::openai_embed(sdk_client, config, &request).await
+            }
+            ProviderType::Anthropic { .. } => {
+                Err(Error::UnsupportedOperation(
+                    "Embeddings are not supported by Anthropic - use OpenAI client".to_string()
+                ))
+            }
+            ProviderType::Gemini { .. } => {
+                Err(Error::UnsupportedOperation(
+                    "Embeddings are not yet implemented for Gemini".to_string()
+                ))
+            }
+        }
+    }
+
+    // =========================================================================
     // Batch API methods
     // =========================================================================
 

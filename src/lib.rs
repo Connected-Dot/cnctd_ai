@@ -9,6 +9,7 @@ pub mod mcp;
 pub mod tool_helpers;
 pub mod agent;
 pub mod batch;
+pub mod embeddings;
 
 pub use client::{Client, ClientOptions, AnthropicConfig, OpenAiConfig, GeminiConfig};
 pub use error::{Error, Result};
@@ -51,6 +52,17 @@ pub use batch::{
     BatchResultType,
     BatchItemError,
     BatchAwaitOptions,
+};
+
+// Re-export embedding types
+pub use embeddings::{
+    EmbeddingRequest,
+    EmbeddingInput,
+    EmbeddingResponse,
+    Embedding,
+    EmbeddingUsage,
+    embed_small,
+    embed_large,
 };
 
 // Re-export Tool from rmcp (replaces custom Tool struct)
