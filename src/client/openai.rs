@@ -100,7 +100,9 @@ pub(super) async fn complete(
             request_builder.temperature(temp);
         }
         if let Some(max_tokens) = opts.max_tokens {
-            request_builder.max_tokens(max_tokens);
+            // Use max_completion_tokens (newer API) instead of deprecated max_tokens
+            // This is required for o1/o3 reasoning models and works for all other models
+            request_builder.max_completion_tokens(max_tokens);
         }
         if let Some(top_p) = opts.top_p {
             request_builder.top_p(top_p);
@@ -273,7 +275,9 @@ pub(super) async fn stream(
             request_builder.temperature(temp);
         }
         if let Some(max_tokens) = opts.max_tokens {
-            request_builder.max_tokens(max_tokens);
+            // Use max_completion_tokens (newer API) instead of deprecated max_tokens
+            // This is required for o1/o3 reasoning models and works for all other models
+            request_builder.max_completion_tokens(max_tokens);
         }
         if let Some(top_p) = opts.top_p {
             request_builder.top_p(top_p);
