@@ -13,6 +13,7 @@ use cnctd_ai::{
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create Gemini client
+    dotenvy::dotenv().ok();
     let api_key = std::env::var("GEMINI_API_KEY")
         .expect("GEMINI_API_KEY environment variable required");
 

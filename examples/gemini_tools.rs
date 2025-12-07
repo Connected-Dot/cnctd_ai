@@ -10,6 +10,7 @@ use std::env;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
     let api_key = env::var("GEMINI_API_KEY")
         .expect("GEMINI_API_KEY environment variable must be set");
 
@@ -17,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::gemini(
         GeminiConfig {
             api_key,
-            model: "gemini-2.0-flash".to_string(),
+            model: "gemini-2.5-flash".to_string(),
         },
         None,
     )?;
@@ -53,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("      Outcome: {:?}", result.outcome);
             if let Some(output) = &result.output {
                 let preview: String = output.chars().take(200).collect();
-                println!("      Output: {}{}", preview, if output.len() > 200 { "..." } else { "" });
+                println!("      Output: {}{}", preview, if output.len() > 2000 { "..." } else { "" });
             }
         }
     }
