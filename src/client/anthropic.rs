@@ -162,6 +162,8 @@ pub(super) async fn complete(
         model: anthropic_response.model,
         tool_uses: tool_uses_opt,
         grounding_metadata: None,
+        code_execution_results: None,
+        google_maps_widget_token: None,
     })
 }
 

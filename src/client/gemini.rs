@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::request::{CompletionRequest, BuiltInTool};
-use crate::response::{CompletionResponse, GroundingMetadata};
+use crate::response::{CompletionResponse, GroundingMetadata, CodeExecutionResult};
 use crate::stream::CompletionStream;
 use super::config::GeminiConfig;
 
@@ -135,12 +135,55 @@ pub(super) async fn complete(
                         }
                     }));
                 }
+                BuiltInTool::CodeExecution => {
+                    tools_array.push(serde_json::json!({
+                        "codeExecution": {}
+                    }));
+                }
+                BuiltInTool::UrlContext => {
+                    tools_array.push(serde_json::json!({
+                        "urlContext": {}
+                    }));
+                }
+                BuiltInTool::GoogleMaps { enable_widget } => {
+                    let mut maps_config = serde_json::Map::new();
+                    if let Some(enable) = enable_widget {
+                        maps_config.insert("enableWidget".to_string(), serde_json::json!(enable));
+                    }
+                    tools_array.push(serde_json::json!({
+                        "googleMaps": maps_config
+                    }));
+                }
             }
         }
     }
     
     if !tools_array.is_empty() {
         body["tools"] = serde_json::json!(tools_array);
+    }
+    
+    // Add tool config if present (for location-aware queries)
+    if let Some(tool_config) = &request.tool_config {
+        if let Some(retrieval_config) = &tool_config.retrieval_config {
+            let mut retrieval_json = serde_json::Map::new();
+            
+            if let Some(lat_lng) = &retrieval_config.lat_lng {
+                retrieval_json.insert("latLng".to_string(), serde_json::json!({
+                    "latitude": lat_lng.latitude,
+                    "longitude": lat_lng.longitude
+                }));
+            }
+            
+            if let Some(lang) = &retrieval_config.language_code {
+                retrieval_json.insert("languageCode".to_string(), serde_json::json!(lang));
+            }
+            
+            if !retrieval_json.is_empty() {
+                body["toolConfig"] = serde_json::json!({
+                    "retrievalConfig": retrieval_json
+                });
+            }
+        }
     }
     
     // Add generation config
@@ -203,9 +246,10 @@ pub(super) async fn complete(
         .as_array()
         .ok_or_else(|| crate::error::Error::GeminiError("No parts in response".into()))?;
     
-    // Extract text and function calls from parts
+    // Extract text, function calls, and code execution results from parts
     let mut content = String::new();
     let mut tool_uses = Vec::new();
+    let mut code_execution_results = Vec::new();
     
     for part in parts {
         if let Some(text) = part["text"].as_str() {
@@ -224,10 +268,49 @@ pub(super) async fn complete(
                 input: args,
             });
         }
+        // Handle executable code part
+        if let Some(executable_code) = part.get("executableCode") {
+            let code = executable_code["code"].as_str().map(|s| s.to_string());
+            let language = executable_code["language"].as_str().map(|s| s.to_string());
+            code_execution_results.push(CodeExecutionResult {
+                code,
+                language,
+                outcome: None,
+                output: None,
+            });
+        }
+        // Handle code execution result part
+        if let Some(code_result) = part.get("codeExecutionResult") {
+            let outcome = code_result["outcome"].as_str()
+                .and_then(|s| serde_json::from_value(serde_json::json!(s)).ok());
+            let output = code_result["output"].as_str().map(|s| s.to_string());
+            
+            // If we have a pending code execution, update it with results
+            if let Some(last) = code_execution_results.last_mut() {
+                if last.outcome.is_none() {
+                    last.outcome = outcome;
+                    last.output = output;
+                    continue;
+                }
+            }
+            // Otherwise create a new result entry
+            code_execution_results.push(CodeExecutionResult {
+                code: None,
+                language: None,
+                outcome,
+                output,
+            });
+        }
     }
     
     let tool_uses_opt = if !tool_uses.is_empty() {
         Some(tool_uses.clone())
+    } else {
+        None
+    };
+    
+    let code_results_opt = if !code_execution_results.is_empty() {
+        Some(code_execution_results)
     } else {
         None
     };
@@ -269,6 +352,12 @@ pub(super) async fn complete(
     let grounding_metadata = candidate.get("groundingMetadata")
         .and_then(|gm| serde_json::from_value::<GroundingMetadata>(gm.clone()).ok());
     
+    // Extract Google Maps widget token if present
+    let google_maps_widget_token = candidate
+        .get("googleMapsWidgetContextToken")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    
     let message = crate::message::Message {
         role: crate::message::Role::Assistant,
         content,
@@ -283,6 +372,8 @@ pub(super) async fn complete(
         model: config.model.clone(),
         tool_uses: tool_uses_opt,
         grounding_metadata,
+        code_execution_results: code_results_opt,
+        google_maps_widget_token,
     })
 }
 
@@ -408,12 +499,55 @@ pub(super) async fn stream(
                         }
                     }));
                 }
+                BuiltInTool::CodeExecution => {
+                    tools_array.push(serde_json::json!({
+                        "codeExecution": {}
+                    }));
+                }
+                BuiltInTool::UrlContext => {
+                    tools_array.push(serde_json::json!({
+                        "urlContext": {}
+                    }));
+                }
+                BuiltInTool::GoogleMaps { enable_widget } => {
+                    let mut maps_config = serde_json::Map::new();
+                    if let Some(enable) = enable_widget {
+                        maps_config.insert("enableWidget".to_string(), serde_json::json!(enable));
+                    }
+                    tools_array.push(serde_json::json!({
+                        "googleMaps": maps_config
+                    }));
+                }
             }
         }
     }
     
     if !tools_array.is_empty() {
         body["tools"] = serde_json::json!(tools_array);
+    }
+    
+    // Add tool config if present (for location-aware queries)
+    if let Some(tool_config) = &request.tool_config {
+        if let Some(retrieval_config) = &tool_config.retrieval_config {
+            let mut retrieval_json = serde_json::Map::new();
+            
+            if let Some(lat_lng) = &retrieval_config.lat_lng {
+                retrieval_json.insert("latLng".to_string(), serde_json::json!({
+                    "latitude": lat_lng.latitude,
+                    "longitude": lat_lng.longitude
+                }));
+            }
+            
+            if let Some(lang) = &retrieval_config.language_code {
+                retrieval_json.insert("languageCode".to_string(), serde_json::json!(lang));
+            }
+            
+            if !retrieval_json.is_empty() {
+                body["toolConfig"] = serde_json::json!({
+                    "retrievalConfig": retrieval_json
+                });
+            }
+        }
     }
     
     // Add generation config

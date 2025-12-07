@@ -66,6 +66,7 @@ impl<'a> Agent<'a> {
             messages: Vec::new(),
             tools: None,
             built_in_tools: None,
+            tool_config: None,
             options: Some(RequestOptions {
                 max_tokens: Some(1024),  // Reasonable default for simple tasks
                 ..Default::default()

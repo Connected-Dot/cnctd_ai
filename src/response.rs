@@ -12,6 +12,12 @@ pub struct CompletionResponse {
     /// Grounding metadata from search-enabled responses (Gemini)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grounding_metadata: Option<GroundingMetadata>,
+    /// Code execution results from Gemini
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_execution_results: Option<Vec<CodeExecutionResult>>,
+    /// Google Maps widget context token for rendering interactive widgets
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub google_maps_widget_token: Option<String>,
 }
 
 impl CompletionResponse {
@@ -37,6 +43,21 @@ impl CompletionResponse {
     /// Get grounding sources/citations (if any)
     pub fn sources(&self) -> Option<&Vec<GroundingChunk>> {
         self.grounding_metadata.as_ref()?.grounding_chunks.as_ref()
+    }
+
+    /// Check if response contains code execution results
+    pub fn has_code_execution(&self) -> bool {
+        self.code_execution_results.is_some()
+    }
+
+    /// Get code execution results (if any)
+    pub fn code_results(&self) -> Option<&Vec<CodeExecutionResult>> {
+        self.code_execution_results.as_ref()
+    }
+
+    /// Check if response has a Google Maps widget token
+    pub fn has_maps_widget(&self) -> bool {
+        self.google_maps_widget_token.is_some()
     }
 }
 
@@ -116,4 +137,33 @@ pub struct GroundingSupport {
     /// Confidence scores for each chunk
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence_scores: Option<Vec<f32>>,
+}
+
+/// Code execution result from Gemini
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeExecutionResult {
+    /// The executed code
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Programming language (usually "PYTHON")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Execution outcome
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<CodeExecutionOutcome>,
+    /// Output from code execution
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+}
+
+/// Outcome of code execution
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CodeExecutionOutcome {
+    OutcomeOk,
+    OutcomeFailed,
+    OutcomeDeadlineExceeded,
+    #[serde(other)]
+    OutcomeUnspecified,
 }
