@@ -1,5 +1,6 @@
 use futures::StreamExt;
 use eventsource_stream::Eventsource;
+use crate::response::{GroundingMetadata, CodeExecutionResult};
 
 /// A chunk of streaming completion data
 #[derive(Debug, Clone)]
@@ -24,7 +25,13 @@ pub struct CompletionStream {
     accumulated_text: String,
     usage: Option<crate::response::Usage>,
     finish_reason: Option<crate::response::FinishReason>,
-    tool_uses: Vec<crate::tool::ToolUse>,  
+    tool_uses: Vec<crate::tool::ToolUse>,
+    /// Grounding metadata from Gemini search (accumulated during streaming)
+    grounding_metadata: Option<GroundingMetadata>,
+    /// Code execution results from Gemini (accumulated during streaming)
+    code_execution_results: Vec<CodeExecutionResult>,
+    /// Google Maps widget token from Gemini
+    google_maps_widget_token: Option<String>,
 }
 
 impl CompletionStream {
@@ -44,6 +51,9 @@ impl CompletionStream {
             usage: None,
             finish_reason: None,
             tool_uses: Vec::new(),
+            grounding_metadata: None,
+            code_execution_results: Vec::new(),
+            google_maps_widget_token: None,
         }
     }
 
@@ -58,6 +68,9 @@ impl CompletionStream {
             usage: None,
             finish_reason: None,
             tool_uses: Vec::new(),
+            grounding_metadata: None,
+            code_execution_results: Vec::new(),
+            google_maps_widget_token: None,
         }
     }
 
@@ -74,6 +87,9 @@ impl CompletionStream {
             usage: None,
             finish_reason: None,
             tool_uses: Vec::new(),
+            grounding_metadata: None,
+            code_execution_results: Vec::new(),
+            google_maps_widget_token: None,
         }
     }
 
@@ -383,6 +399,8 @@ impl CompletionStream {
     /// Gemini streaming format:
     /// - Each SSE data line contains a JSON object with candidates array
     /// - candidates[0].content.parts contains text or functionCall objects
+    /// - candidates[0].groundingMetadata contains search grounding info
+    /// - candidates[0].googleMapsWidgetContextToken for maps widget
     /// - usageMetadata contains token counts
     /// - candidates[0].finishReason indicates completion
     async fn handle_gemini_sse_event(
@@ -400,6 +418,20 @@ impl CompletionStream {
             Some(c) => c,
             None => return Some(None), // No candidate yet
         };
+
+        // Extract grounding metadata if present (for search billing)
+        if let Some(gm) = candidate.get("groundingMetadata") {
+            if let Ok(metadata) = serde_json::from_value::<GroundingMetadata>(gm.clone()) {
+                self.grounding_metadata = Some(metadata);
+            }
+        }
+
+        // Extract Google Maps widget token if present
+        if let Some(token) = candidate.get("googleMapsWidgetContextToken") {
+            if let Some(token_str) = token.as_str() {
+                self.google_maps_widget_token = Some(token_str.to_string());
+            }
+        }
 
         // Extract parts from content
         let parts = match candidate["content"]["parts"].as_array() {
@@ -427,6 +459,41 @@ impl CompletionStream {
                     id,
                     name,
                     input: args,
+                });
+            }
+
+            // Handle executable code part (for code execution billing)
+            if let Some(executable_code) = part.get("executableCode") {
+                let code = executable_code["code"].as_str().map(|s| s.to_string());
+                let language = executable_code["language"].as_str().map(|s| s.to_string());
+                self.code_execution_results.push(CodeExecutionResult {
+                    code,
+                    language,
+                    outcome: None,
+                    output: None,
+                });
+            }
+
+            // Handle code execution result part
+            if let Some(code_result) = part.get("codeExecutionResult") {
+                let outcome = code_result["outcome"].as_str()
+                    .and_then(|s| serde_json::from_value(serde_json::json!(s)).ok());
+                let output = code_result["output"].as_str().map(|s| s.to_string());
+                
+                // If we have a pending code execution, update it with results
+                if let Some(last) = self.code_execution_results.last_mut() {
+                    if last.outcome.is_none() {
+                        last.outcome = outcome;
+                        last.output = output;
+                        continue;
+                    }
+                }
+                // Otherwise create a new result entry
+                self.code_execution_results.push(CodeExecutionResult {
+                    code: None,
+                    language: None,
+                    outcome,
+                    output,
                 });
             }
         }
@@ -494,6 +561,12 @@ impl CompletionStream {
             None
         };
 
+        let code_results_opt = if !self.code_execution_results.is_empty() {
+            Some(self.code_execution_results.clone())
+        } else {
+            None
+        };
+
         Some(crate::response::CompletionResponse {
             message: crate::message::Message {
                 role: crate::message::Role::Assistant,
@@ -509,9 +582,9 @@ impl CompletionStream {
             finish_reason: self.finish_reason.clone().unwrap_or(crate::response::FinishReason::Other),
             model: self.model.clone(),
             tool_uses: tool_uses_opt,
-            grounding_metadata: None,
-        code_execution_results: None,
-        google_maps_widget_token: None,
+            grounding_metadata: self.grounding_metadata.clone(),
+            code_execution_results: code_results_opt,
+            google_maps_widget_token: self.google_maps_widget_token.clone(),
         })
     }
 
