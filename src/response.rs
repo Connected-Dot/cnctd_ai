@@ -32,7 +32,10 @@ impl CompletionResponse {
 
     /// Check if response was grounded with search results
     pub fn is_grounded(&self) -> bool {
-        self.grounding_metadata.is_some()
+        // Check for actual search data, not just metadata presence
+        self.grounding_metadata.as_ref()
+            .map(|m| m.web_search_queries.is_some() || m.grounding_chunks.is_some())
+            .unwrap_or(false)
     }
 
     /// Get search queries used for grounding (if any)
