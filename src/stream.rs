@@ -355,9 +355,13 @@ impl CompletionStream {
                 if let Some(last_tool) = self.tool_uses.last_mut() {
                     if let Some(json_str) = last_tool.input.as_str() {
                         // Try final parse of accumulated JSON
-                        if let Ok(parsed) = serde_json::from_str(json_str) {
-                            last_tool.input = parsed;
-                        }
+                        // If parsing fails, fall back to empty object (API requires object, not string)
+                        last_tool.input = serde_json::from_str(json_str)
+                            .unwrap_or_else(|_| serde_json::json!({}));
+                    }
+                    // Ensure input is always an object - Anthropic API rejects string inputs
+                    if !last_tool.input.is_object() {
+                        last_tool.input = serde_json::json!({});
                     }
                 }
                 Some(None) // Continue to next event
