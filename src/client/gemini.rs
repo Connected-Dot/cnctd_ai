@@ -363,6 +363,7 @@ pub(super) async fn complete(
         content,
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
+            tool_results: None,
     };
     
     Ok(CompletionResponse {

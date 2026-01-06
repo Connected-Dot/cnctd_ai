@@ -139,6 +139,7 @@ pub(super) async fn complete(
         content: choice.message.content.clone().unwrap_or_default(),
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
+            tool_results: None,
     };
     
     let usage = if let Some(usage) = &response.usage {

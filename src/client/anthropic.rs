@@ -139,6 +139,7 @@ pub(super) async fn complete(
         content,
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
+            tool_results: None,
     };
     
     let usage = crate::response::Usage {
@@ -207,9 +208,24 @@ pub(super) async fn stream(
     for msg in request.messages.iter().filter(|m| !matches!(m.role, crate::message::Role::System)) {
         match msg.role {
             crate::message::Role::User => {
-                // Check if this is a tool result message
-                if let Some(tool_call_id) = &msg.tool_call_id {
-                    // Tool result message needs content blocks format
+                // Check if this has multiple tool results (new format)
+                if let Some(tool_results) = &msg.tool_results {
+                    // Multiple tool results in a single message
+                    let content_blocks: Vec<serde_json::Value> = tool_results
+                        .iter()
+                        .map(|tr| serde_json::json!({
+                            "type": "tool_result",
+                            "tool_use_id": tr.tool_call_id,
+                            "content": tr.content,
+                            "is_error": tr.is_error,
+                        }))
+                        .collect();
+                    messages.push(serde_json::json!({
+                        "role": "user",
+                        "content": content_blocks,
+                    }));
+                } else if let Some(tool_call_id) = &msg.tool_call_id {
+                    // Legacy single tool result format
                     messages.push(serde_json::json!({
                         "role": "user",
                         "content": [{
@@ -227,6 +243,7 @@ pub(super) async fn stream(
                     }));
                 }
             }
+
             crate::message::Role::Assistant => {
                 // Check if this has tool uses
                 if let Some(tool_uses) = &msg.tool_uses {

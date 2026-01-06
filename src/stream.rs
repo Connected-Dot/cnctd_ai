@@ -577,6 +577,7 @@ impl CompletionStream {
                 content: self.accumulated_text.clone(),
                 tool_uses: tool_uses_opt.clone(),
                 tool_call_id: None,
+            tool_results: None,
             },
             usage: self.usage.clone().unwrap_or(crate::response::Usage {
                 prompt_tokens: 0,

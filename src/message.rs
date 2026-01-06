@@ -3,6 +3,33 @@ use serde::{Deserialize, Serialize};
 
 use crate::ToolUse;
 
+/// Represents a single tool result (tool_call_id + content)
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolResult {
+    pub tool_call_id: String,
+    pub content: String,
+    #[serde(default)]
+    pub is_error: bool,
+}
+
+impl ToolResult {
+    pub fn new(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            content: content.into(),
+            is_error: false,
+        }
+    }
+    
+    pub fn error(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            content: content.into(),
+            is_error: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
@@ -10,8 +37,12 @@ pub struct Message {
     // Internal fields for tool tracking
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tool_uses: Option<Vec<ToolUse>>,
+    /// Single tool result (legacy, for backward compatibility)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tool_call_id: Option<String>,
+    /// Multiple tool results in one message (Anthropic API requirement)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tool_results: Option<Vec<ToolResult>>,
 }
 
 impl Message {
@@ -21,6 +52,7 @@ impl Message {
             content: content.into(),
             tool_uses: None,
             tool_call_id: None,
+            tool_results: None,
         }
     }
     
@@ -30,6 +62,7 @@ impl Message {
             content: content.into(),
             tool_uses: None,
             tool_call_id: None,
+            tool_results: None,
         }
     }
     
@@ -39,6 +72,7 @@ impl Message {
             content: content.into(),
             tool_uses: None,
             tool_call_id: None,
+            tool_results: None,
         }
     }
     
@@ -49,6 +83,7 @@ impl Message {
             content: String::new(),
             tool_uses: Some(vec![tool_use]),
             tool_call_id: None,
+            tool_results: None,
         }
     }
     
@@ -59,6 +94,7 @@ impl Message {
             content: String::new(),
             tool_uses: if tool_uses.is_empty() { None } else { Some(tool_uses) },
             tool_call_id: None,
+            tool_results: None,
         }
     }
     
@@ -69,17 +105,53 @@ impl Message {
             content: content.into(),
             tool_uses: if tool_uses.is_empty() { None } else { Some(tool_uses) },
             tool_call_id: None,
+            tool_results: None,
         }
     }
     
-    /// Create a tool result user message
+    /// Create a tool result user message (single result, legacy)
     pub fn tool_result(tool_call_id: String, content: impl Into<String>) -> Self {
         Self {
-            role: Role::User,  // Note: tool results typically have User role
+            role: Role::User,
             content: content.into(),
             tool_uses: None,
             tool_call_id: Some(tool_call_id),
+            tool_results: None,
         }
+    }
+    
+    /// Create a user message with multiple tool results
+    /// This is the correct way to respond to an assistant message with multiple tool_uses
+    pub fn tool_results(results: Vec<ToolResult>) -> Self {
+        Self {
+            role: Role::User,
+            content: String::new(),
+            tool_uses: None,
+            tool_call_id: None,
+            tool_results: if results.is_empty() { None } else { Some(results) },
+        }
+    }
+    
+    /// Check if this message contains tool results
+    pub fn has_tool_results(&self) -> bool {
+        self.tool_call_id.is_some() || self.tool_results.is_some()
+    }
+    
+    /// Get all tool results from this message (combines legacy and new format)
+    pub fn get_tool_results(&self) -> Vec<ToolResult> {
+        let mut results = Vec::new();
+        
+        // Legacy single tool result
+        if let Some(ref tool_call_id) = self.tool_call_id {
+            results.push(ToolResult::new(tool_call_id.clone(), self.content.clone()));
+        }
+        
+        // Multiple tool results
+        if let Some(ref tool_results) = self.tool_results {
+            results.extend(tool_results.clone());
+        }
+        
+        results
     }
 }
 

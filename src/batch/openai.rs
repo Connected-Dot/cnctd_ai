@@ -366,6 +366,7 @@ fn parse_completion_from_body(body: &serde_json::Value) -> Result<crate::respons
             content,
             tool_uses: tool_uses_opt.clone(),
             tool_call_id: None,
+            tool_results: None,
         },
         usage,
         finish_reason,
