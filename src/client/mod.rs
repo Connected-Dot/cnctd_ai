@@ -2,6 +2,7 @@ pub mod config;
 pub mod options;
 mod anthropic;
 mod openai;
+mod openai_responses;
 mod gemini;
 
 pub use config::{AnthropicConfig, OpenAiConfig, GeminiConfig};
@@ -79,7 +80,8 @@ impl Client {
                 anthropic::complete(config, &request).await
             }
             ProviderType::OpenAi { sdk_client, config } => {
-                openai::complete(sdk_client, config, &request).await
+                // Use Responses API for all OpenAI models
+                openai_responses::complete(sdk_client, config, &request).await
             }
             ProviderType::Gemini { config } => {
                 gemini::complete(config, &request).await
@@ -96,7 +98,8 @@ impl Client {
                 anthropic::stream(config, &request).await
             }
             ProviderType::OpenAi { sdk_client, config } => {
-                openai::stream(sdk_client, config, &request).await
+                // Use Responses API for all OpenAI models
+                openai_responses::stream(sdk_client, config, &request).await
             }
             ProviderType::Gemini { config } => {
                 gemini::stream(config, &request).await

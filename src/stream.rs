@@ -32,6 +32,8 @@ pub struct CompletionStream {
     code_execution_results: Vec<CodeExecutionResult>,
     /// Google Maps widget token from Gemini
     google_maps_widget_token: Option<String>,
+    /// Accumulated function call arguments (for OpenAI Responses API)
+    accumulated_function_args: std::collections::HashMap<String, String>,
 }
 
 impl CompletionStream {
@@ -54,6 +56,7 @@ impl CompletionStream {
             grounding_metadata: None,
             code_execution_results: Vec::new(),
             google_maps_widget_token: None,
+            accumulated_function_args: std::collections::HashMap::new(),
         }
     }
 
@@ -71,6 +74,26 @@ impl CompletionStream {
             grounding_metadata: None,
             code_execution_results: Vec::new(),
             google_maps_widget_token: None,
+            accumulated_function_args: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Create a new stream for OpenAI Responses API
+    pub fn openai_responses(
+        stream: async_openai::types::responses::ResponseStream,
+        model: String,
+    ) -> Self {
+        Self {
+            inner: StreamType::OpenAiResponses(stream),
+            model,
+            accumulated_text: String::new(),
+            usage: None,
+            finish_reason: None,
+            tool_uses: Vec::new(),
+            grounding_metadata: None,
+            code_execution_results: Vec::new(),
+            google_maps_widget_token: None,
+            accumulated_function_args: std::collections::HashMap::new(),
         }
     }
 
@@ -90,6 +113,7 @@ impl CompletionStream {
             grounding_metadata: None,
             code_execution_results: Vec::new(),
             google_maps_widget_token: None,
+            accumulated_function_args: std::collections::HashMap::new(),
         }
     }
 
@@ -142,26 +166,19 @@ impl CompletionStream {
                                 // Handle tool calls
                                 if let Some(tool_calls) = &choice.delta.tool_calls {
                                     for tool_call in tool_calls {
-                                        // OpenAI streams tool calls with an index
-                                        // We need to accumulate them properly
                                         if let Some(function) = &tool_call.function {
-                                            // If we have a name, this is a new tool call
                                             if let Some(name) = &function.name {
                                                 self.tool_uses.push(crate::tool::ToolUse {
                                                     id: tool_call.id.clone().unwrap_or_default(),
                                                     name: name.clone(),
-                                                    input: serde_json::json!({}), // Will accumulate arguments next
+                                                    input: serde_json::json!({}),
                                                 });
                                             }
                                             
-                                            // If we have arguments, accumulate them to the last tool
                                             if let Some(arguments) = &function.arguments {
                                                 if let Some(last_tool) = self.tool_uses.last_mut() {
-                                                    // OpenAI streams JSON as strings, so we accumulate and parse later
-                                                    // For now, just store the raw string
                                                     if let Some(current_args) = last_tool.input.as_str() {
                                                         let combined = format!("{}{}", current_args, arguments);
-                                                        // Try to parse as JSON, if it fails keep as string
                                                         last_tool.input = serde_json::from_str(&combined)
                                                             .unwrap_or(serde_json::Value::String(combined));
                                                     } else {
@@ -173,7 +190,6 @@ impl CompletionStream {
                                     }
                                 }
                                 
-                                // Handle text content
                                 if let Some(content) = &choice.delta.content {
                                     self.accumulated_text.push_str(content);
                                     return Some(Ok(StreamChunk {
@@ -182,7 +198,6 @@ impl CompletionStream {
                                     }));
                                 }
                                 
-                                // Handle finish reason
                                 if let Some(finish_reason) = &choice.finish_reason {
                                     self.finish_reason = Some(match finish_reason {
                                         async_openai::types::FinishReason::Stop => crate::response::FinishReason::Stop,
@@ -194,8 +209,6 @@ impl CompletionStream {
                                 }
                             }
 
-                            // If we have something to report (finish reason, tool uses, or usage),
-                            // return a chunk. Otherwise continue to next chunk.
                             if self.finish_reason.is_some() || !self.tool_uses.is_empty() || has_usage_update {
                                 return Some(Ok(StreamChunk {
                                     delta: None,
@@ -203,12 +216,27 @@ impl CompletionStream {
                                 }));
                             }
 
-                            // Continue to next chunk if nothing to return
                             continue;
                         }
                         Some(Err(e)) => {
                             return Some(Err(crate::error::Error::Other(
                                 format!("Stream error: {}", e)
+                            )));
+                        }
+                        None => return None,
+                    }
+                }
+                StreamType::OpenAiResponses(stream) => {
+                    match stream.next().await {
+                        Some(Ok(event)) => {
+                            if let Some(chunk) = self.handle_openai_responses_event(event) {
+                                return Some(Ok(chunk));
+                            }
+                            continue;
+                        }
+                        Some(Err(e)) => {
+                            return Some(Err(crate::error::Error::Other(
+                                format!("Responses API stream error: {}", e)
                             )));
                         }
                         None => return None,
@@ -224,64 +252,144 @@ impl CompletionStream {
                         }
                         None => return None,
                     };
-                    // Parse the SSE event
                     if let Some(chunk) = self.handle_gemini_sse_event(event).await? {
                         return Some(Ok(chunk));
                     }
-                    // If no chunk returned, continue to next event
                 }
             }
         }
     }
 
-    async fn handle_openai_chunk(
+    /// Handle OpenAI Responses API stream events
+    fn handle_openai_responses_event(
         &mut self,
-        response: async_openai::types::CreateChatCompletionStreamResponse,
-    ) -> Option<Result<StreamChunk, crate::error::Error>> {
-        use async_openai::types::ChatCompletionStreamResponseDelta;
-
-        // Get the first choice (OpenAI can return multiple choices but we'll use the first)
-        let choice = response.choices.first()?;
-
-        // Extract text delta
-        let delta = &choice.delta;
-        let text_delta = match delta {
-            ChatCompletionStreamResponseDelta { content: Some(content), .. } => {
-                self.accumulated_text.push_str(content);
-                Some(content.clone())
+        event: async_openai::types::responses::ResponseEvent,
+    ) -> Option<StreamChunk> {
+        use async_openai::types::responses::ResponseEvent;
+        
+        match event {
+            ResponseEvent::ResponseCreated(e) => {
+                eprintln!("DEBUG Responses: Created, id={}", e.response.id);
+                None
             }
-            _ => None,
-        };
-
-        // Update finish reason if present
-        if let Some(finish_reason) = &choice.finish_reason {
-            self.finish_reason = Some(match finish_reason {
-                async_openai::types::FinishReason::Stop => crate::response::FinishReason::Stop,
-                async_openai::types::FinishReason::Length => crate::response::FinishReason::Length,
-                async_openai::types::FinishReason::ContentFilter => crate::response::FinishReason::ContentFilter,
-                async_openai::types::FinishReason::ToolCalls => crate::response::FinishReason::ToolUse,
-                async_openai::types::FinishReason::FunctionCall => crate::response::FinishReason::ToolUse,
-            });
-        }
-
-        // Update usage if present (typically only in the last chunk)
-        if let Some(usage) = &response.usage {
-            self.usage = Some(crate::response::Usage {
-                prompt_tokens: usage.prompt_tokens,
-                completion_tokens: usage.completion_tokens,
-                total_tokens: usage.total_tokens,
-            });
-        }
-
-        // Return chunk if we have text, otherwise get next chunk
-        if text_delta.is_some() || self.finish_reason.is_some() {
-            Some(Ok(StreamChunk {
-                delta: text_delta,
-                finish_reason: self.finish_reason.clone(),
-            }))
-        } else {
-            // No content yet, continue to next chunk
-            Box::pin(self.next()).await
+            ResponseEvent::ResponseInProgress(_) => {
+                eprintln!("DEBUG Responses: In progress");
+                None
+            }
+            ResponseEvent::ResponseOutputTextDelta(e) => {
+                eprintln!("DEBUG Responses: Text delta len={}", e.delta.len());
+                self.accumulated_text.push_str(&e.delta);
+                Some(StreamChunk {
+                    delta: Some(e.delta),
+                    finish_reason: None,
+                })
+            }
+            ResponseEvent::ResponseOutputTextDone(e) => {
+                eprintln!("DEBUG Responses: Text done, total len={}", e.text.len());
+                None
+            }
+            ResponseEvent::ResponseFunctionCallArgumentsDelta(e) => {
+                eprintln!("DEBUG Responses: Function args delta, item_id={}", e.item_id);
+                // Accumulate function call arguments
+                let entry = self.accumulated_function_args.entry(e.item_id).or_default();
+                entry.push_str(&e.delta);
+                None
+            }
+            ResponseEvent::ResponseFunctionCallArgumentsDone(e) => {
+                eprintln!("DEBUG Responses: Function call done, name={}, args={}", e.name, e.arguments);
+                // Create tool use from accumulated arguments
+                let args_value: serde_json::Value = serde_json::from_str(&e.arguments)
+                    .unwrap_or_else(|_| serde_json::Value::String(e.arguments.clone()));
+                self.tool_uses.push(crate::tool::ToolUse {
+                    id: e.item_id.clone(),
+                    name: e.name,
+                    input: args_value,
+                });
+                None
+            }
+            ResponseEvent::ResponseOutputItemDone(e) => {
+                eprintln!("DEBUG Responses: Output item done, index={}", e.output_index);
+                // Handle function calls from output item
+                if let async_openai::types::responses::OutputItem::FunctionCall(fc) = e.item {
+                    let args_value: serde_json::Value = serde_json::from_str(&fc.arguments)
+                        .unwrap_or_else(|_| serde_json::Value::String(fc.arguments.clone()));
+                    // Only add if not already present
+                    if !self.tool_uses.iter().any(|tu| tu.id == fc.call_id) {
+                        self.tool_uses.push(crate::tool::ToolUse {
+                            id: fc.call_id,
+                            name: fc.name,
+                            input: args_value,
+                        });
+                    }
+                }
+                None
+            }
+            ResponseEvent::ResponseCompleted(e) => {
+                eprintln!("DEBUG Responses: Completed, status={:?}", e.response.status);
+                // Set finish reason
+                self.finish_reason = Some(if !self.tool_uses.is_empty() {
+                    crate::response::FinishReason::ToolUse
+                } else {
+                    crate::response::FinishReason::Stop
+                });
+                
+                // Extract usage if present
+                if let Some(usage) = e.response.usage {
+                    self.usage = Some(crate::response::Usage {
+                        prompt_tokens: usage.input_tokens,
+                        completion_tokens: usage.output_tokens,
+                        total_tokens: usage.total_tokens,
+                    });
+                }
+                
+                Some(StreamChunk {
+                    delta: None,
+                    finish_reason: self.finish_reason.clone(),
+                })
+            }
+            ResponseEvent::ResponseFailed(e) => {
+                eprintln!("DEBUG Responses: Failed");
+                self.finish_reason = Some(crate::response::FinishReason::Other);
+                if let Some(err) = e.response.error {
+                    eprintln!("DEBUG Responses: Error - {}: {}", err.code, err.message);
+                }
+                Some(StreamChunk {
+                    delta: None,
+                    finish_reason: Some(crate::response::FinishReason::Other),
+                })
+            }
+            ResponseEvent::ResponseIncomplete(e) => {
+                eprintln!("DEBUG Responses: Incomplete");
+                self.finish_reason = Some(crate::response::FinishReason::Length);
+                if let Some(details) = e.response.incomplete_details {
+                    eprintln!("DEBUG Responses: Incomplete reason - {}", details.reason);
+                }
+                Some(StreamChunk {
+                    delta: None,
+                    finish_reason: Some(crate::response::FinishReason::Length),
+                })
+            }
+            ResponseEvent::ResponseError(e) => {
+                eprintln!("DEBUG Responses: Error event - {}", e.message);
+                self.finish_reason = Some(crate::response::FinishReason::Other);
+                Some(StreamChunk {
+                    delta: None,
+                    finish_reason: Some(crate::response::FinishReason::Other),
+                })
+            }
+            // Reasoning events
+            ResponseEvent::ResponseReasoningSummaryTextDelta(e) => {
+                eprintln!("DEBUG Responses: Reasoning delta");
+                // We could optionally expose reasoning tokens, for now just log
+                Some(StreamChunk {
+                    delta: Some(e.delta),
+                    finish_reason: None,
+                })
+            }
+            _ => {
+                // Other events we don't handle yet
+                None
+            }
         }
     }
 
@@ -408,14 +516,6 @@ impl CompletionStream {
     }
 
     /// Handle Gemini SSE events
-    /// 
-    /// Gemini streaming format:
-    /// - Each SSE data line contains a JSON object with candidates array
-    /// - candidates[0].content.parts contains text or functionCall objects
-    /// - candidates[0].groundingMetadata contains search grounding info
-    /// - candidates[0].googleMapsWidgetContextToken for maps widget
-    /// - usageMetadata contains token counts
-    /// - candidates[0].finishReason indicates completion
     async fn handle_gemini_sse_event(
         &mut self,
         event: eventsource_stream::Event,
@@ -586,7 +686,7 @@ impl CompletionStream {
                 content: self.accumulated_text.clone(),
                 tool_uses: tool_uses_opt.clone(),
                 tool_call_id: None,
-            tool_results: None,
+                tool_results: None,
             },
             usage: self.usage.clone().unwrap_or(crate::response::Usage {
                 prompt_tokens: 0,
@@ -617,6 +717,7 @@ enum StreamType {
         >
     ),
     OpenAi(async_openai::types::ChatCompletionResponseStream),
+    OpenAiResponses(async_openai::types::responses::ResponseStream),
     GeminiCustom(
         std::pin::Pin<
             Box<
