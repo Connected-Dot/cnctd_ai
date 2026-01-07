@@ -151,3 +151,25 @@ Added `sanitize_schema_for_gemini()` function in `src/client/gemini.rs` that:
 ### Status
 - Code compiles successfully
 - Ready for testing
+
+## Additional Fix: Gemini 3 Tool Incompatibility (2025-01-07)
+
+### Problem
+Gemini 3 API returned: `"Tool use with function calling is unsupported"`
+
+### Root Cause
+Gemini 3 does **NOT** support combining function calling (MCP tools/custom functions) with built-in tools (Google Search, Code Execution, etc.) in the same request.
+
+### Solution
+Added detection for Gemini 3 models in both `complete()` and `stream()`:
+- `is_gemini_3 = config.model.contains("gemini-3")`
+- `has_function_declarations = request.tools.as_ref().map(|t| !t.is_empty()).unwrap_or(false)`
+- When both are true, skip adding built-in tools (prioritize MCP function declarations)
+
+### Files Modified
+- `src/client/gemini.rs` - Added Gemini 3 detection and conditional tool handling
+
+### Impact
+- MCP tools (function declarations) take priority over built-in tools for Gemini 3
+- Built-in tools still work for Gemini 3 if no MCP tools are present
+- Older Gemini models (1.5, 2.0, 2.5) can still use both together
