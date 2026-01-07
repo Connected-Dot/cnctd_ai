@@ -170,10 +170,9 @@ pub(super) async fn complete(
     body["contents"] = serde_json::json!(contents);
     
     // Build tools array
-    // Note: Gemini 3 does NOT support combining function calling with built-in tools
-    // If both are present, we prioritize function declarations (MCP tools)
+    // Note: Gemini does NOT support combining function calling with built-in tools
+    // If function declarations exist, we skip built-in tools (MCP tools take priority)
     let mut tools_array: Vec<serde_json::Value> = Vec::new();
-    let is_gemini_3 = config.model.contains("gemini-3");
     let has_function_declarations = request.tools.as_ref().map(|t| !t.is_empty()).unwrap_or(false);
     
     // Add MCP function declarations if present
@@ -191,8 +190,8 @@ pub(super) async fn complete(
         }));
     }
     
-    // Add built-in tools if present (skip for Gemini 3 when function declarations exist)
-    if !(is_gemini_3 && has_function_declarations) {
+    // Add built-in tools if present (skip when function declarations exist - Gemini limitation)
+    if !has_function_declarations {
     if let Some(built_in_tools) = &request.built_in_tools {
         for tool in built_in_tools {
             match tool {
@@ -563,10 +562,9 @@ pub(super) async fn stream(
     body["contents"] = serde_json::json!(contents);
     
     // Build tools array
-    // Note: Gemini 3 does NOT support combining function calling with built-in tools
-    // If both are present, we prioritize function declarations (MCP tools)
+    // Note: Gemini does NOT support combining function calling with built-in tools
+    // If function declarations exist, we skip built-in tools (MCP tools take priority)
     let mut tools_array: Vec<serde_json::Value> = Vec::new();
-    let is_gemini_3 = config.model.contains("gemini-3");
     let has_function_declarations = request.tools.as_ref().map(|t| !t.is_empty()).unwrap_or(false);
     
     // Add MCP function declarations if present
@@ -584,8 +582,8 @@ pub(super) async fn stream(
         }));
     }
     
-    // Add built-in tools if present (skip for Gemini 3 when function declarations exist)
-    if !(is_gemini_3 && has_function_declarations) {
+    // Add built-in tools if present (skip when function declarations exist - Gemini limitation)
+    if !has_function_declarations {
     if let Some(built_in_tools) = &request.built_in_tools {
         for tool in built_in_tools {
             match tool {
