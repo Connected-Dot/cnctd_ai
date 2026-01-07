@@ -144,11 +144,14 @@ pub(super) async fn complete(
                     
                     // Add function calls
                     for tool_use in tool_uses {
+                        // Add thoughtSignature for Gemini 3 compatibility
+                        // Using dummy signature to skip validation when original not available
                         parts.push(serde_json::json!({
                             "functionCall": {
                                 "name": tool_use.name.clone(),
                                 "args": tool_use.input.clone()
-                            }
+                            },
+                            "thoughtSignature": "skip_thought_signature_validator"
                         }));
                     }
                     
@@ -537,11 +540,14 @@ pub(super) async fn stream(
                     }
                     
                     for tool_use in tool_uses {
+                        // Add thoughtSignature for Gemini 3 compatibility
+                        // Using dummy signature to skip validation when original not available
                         parts.push(serde_json::json!({
                             "functionCall": {
                                 "name": tool_use.name.clone(),
                                 "args": tool_use.input.clone()
-                            }
+                            },
+                            "thoughtSignature": "skip_thought_signature_validator"
                         }));
                     }
                     
