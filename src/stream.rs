@@ -227,19 +227,27 @@ impl CompletionStream {
                     }
                 }
                 StreamType::OpenAiResponses(stream) => {
-                    match stream.next().await {
+                    eprintln!("DEBUG: About to poll OpenAI Responses stream...");
+                    let poll_result = stream.next().await;
+                    eprintln!("DEBUG: Poll result is_some={}", poll_result.is_some());
+                    match poll_result {
                         Some(Ok(event)) => {
+                            eprintln!("DEBUG: Got event from Responses stream");
                             if let Some(chunk) = self.handle_openai_responses_event(event) {
                                 return Some(Ok(chunk));
                             }
                             continue;
                         }
                         Some(Err(e)) => {
+                            eprintln!("DEBUG: Responses stream error: {}", e);
                             return Some(Err(crate::error::Error::Other(
                                 format!("Responses API stream error: {}", e)
                             )));
                         }
-                        None => return None,
+                        None => {
+                            eprintln!("DEBUG: Responses stream ended (None)");
+                            return None;
+                        }
                     }
                 }
                 StreamType::GeminiCustom(stream) => {

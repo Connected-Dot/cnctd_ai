@@ -142,6 +142,7 @@ pub(super) async fn complete(
     }
     
     let create_request = builder.build()?;
+    eprintln!("DEBUG: Responses API request: {:?}", serde_json::to_string(&create_request));
     
     eprintln!("DEBUG: Sending Responses API request to model: {}", config.model);
     
@@ -254,6 +255,7 @@ pub(super) async fn stream(
     }
     
     let create_request = builder.build()?;
+    eprintln!("DEBUG: Responses API request: {:?}", serde_json::to_string(&create_request));
     
     eprintln!("DEBUG: Creating Responses API stream for model: {}", config.model);
     
