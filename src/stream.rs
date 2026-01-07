@@ -227,6 +227,12 @@ impl CompletionStream {
                     }
                 }
                 StreamType::OpenAiResponses(stream) => {
+                    // If we've already completed, don't poll again
+                    if self.finish_reason.is_some() {
+                        eprintln!("DEBUG: Responses stream already completed, returning None");
+                        return None;
+                    }
+                    
                     eprintln!("DEBUG: About to poll OpenAI Responses stream...");
                     let poll_result = stream.next().await;
                     eprintln!("DEBUG: Poll result is_some={}", poll_result.is_some());
@@ -239,6 +245,12 @@ impl CompletionStream {
                             continue;
                         }
                         Some(Err(e)) => {
+                            let err_str = e.to_string();
+                            // "Stream ended" is normal termination, not an error
+                            if err_str.contains("Stream ended") {
+                                eprintln!("DEBUG: Responses stream ended normally");
+                                return None;
+                            }
                             eprintln!("DEBUG: Responses stream error: {}", e);
                             return Some(Err(crate::error::Error::Other(
                                 format!("Responses API stream error: {}", e)
