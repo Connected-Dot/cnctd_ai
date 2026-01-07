@@ -116,6 +116,10 @@ impl CompletionStream {
                 StreamType::OpenAi(stream) => {
                     match stream.next().await {
                         Some(Ok(response)) => {
+                            eprintln!("DEBUG OpenAI stream chunk: choices={}, usage={:?}", 
+                                response.choices.len(),
+                                response.usage.as_ref().map(|u| (u.prompt_tokens, u.completion_tokens))
+                            );
                             let mut has_usage_update = false;
                             
                             // Update usage if present (check this first, before choices)
@@ -130,6 +134,11 @@ impl CompletionStream {
                             }
                             
                             if let Some(choice) = response.choices.get(0) {
+                                eprintln!("DEBUG OpenAI choice: content={:?}, tool_calls={:?}, finish={:?}",
+                                    choice.delta.content.as_ref().map(|s| s.chars().take(50).collect::<String>()),
+                                    choice.delta.tool_calls.as_ref().map(|tc| tc.len()),
+                                    choice.finish_reason
+                                );
                                 // Handle tool calls
                                 if let Some(tool_calls) = &choice.delta.tool_calls {
                                     for tool_call in tool_calls {
