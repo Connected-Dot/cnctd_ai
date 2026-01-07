@@ -4,6 +4,55 @@ use crate::response::{CompletionResponse, GroundingMetadata, CodeExecutionResult
 use crate::stream::CompletionStream;
 use super::config::GeminiConfig;
 
+/// Sanitize a JSON Schema for Gemini's function declaration format.
+/// Gemini has stricter requirements than standard JSON Schema:
+/// - No `$schema` field
+/// - No `additionalProperties` field  
+/// - `type` must be a string, not an array (convert ["string", "null"] to "string")
+fn sanitize_schema_for_gemini(schema: &serde_json::Map<String, serde_json::Value>) -> serde_json::Map<String, serde_json::Value> {
+    let mut result = serde_json::Map::new();
+    
+    for (key, value) in schema {
+        // Skip unsupported fields
+        if key == "$schema" || key == "additionalProperties" {
+            continue;
+        }
+        
+        match value {
+            serde_json::Value::Object(obj) => {
+                // Recursively sanitize nested objects
+                result.insert(key.clone(), serde_json::Value::Object(sanitize_schema_for_gemini(obj)));
+            }
+            serde_json::Value::Array(arr) if key == "type" => {
+                // Convert type arrays to single string
+                // e.g., ["string", "null"] -> "string"
+                let first_non_null = arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .find(|s| *s != "null")
+                    .unwrap_or("string");
+                result.insert(key.clone(), serde_json::Value::String(first_non_null.to_string()));
+            }
+            serde_json::Value::Array(arr) => {
+                // For other arrays (like "required", "enum"), sanitize each element if it's an object
+                let sanitized: Vec<serde_json::Value> = arr.iter().map(|v| {
+                    if let serde_json::Value::Object(obj) = v {
+                        serde_json::Value::Object(sanitize_schema_for_gemini(obj))
+                    } else {
+                        v.clone()
+                    }
+                }).collect();
+                result.insert(key.clone(), serde_json::Value::Array(sanitized));
+            }
+            _ => {
+                result.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    
+    result
+}
+
+
 pub(super) async fn complete(
     config: &GeminiConfig,
     request: &CompletionRequest,
@@ -129,7 +178,7 @@ pub(super) async fn complete(
             serde_json::json!({
                 "name": tool.name.to_string(),
                 "description": tool.description.as_ref().map(|d| d.to_string()).unwrap_or_default(),
-                "parameters": serde_json::Value::Object((*tool.input_schema).clone())
+                "parameters": serde_json::Value::Object(sanitize_schema_for_gemini(&tool.input_schema))
             })
         }).collect();
         
@@ -516,7 +565,7 @@ pub(super) async fn stream(
             serde_json::json!({
                 "name": tool.name.to_string(),
                 "description": tool.description.as_ref().map(|d| d.to_string()).unwrap_or_default(),
-                "parameters": serde_json::Value::Object((*tool.input_schema).clone())
+                "parameters": serde_json::Value::Object(sanitize_schema_for_gemini(&tool.input_schema))
             })
         }).collect();
         

@@ -125,3 +125,29 @@ Tool results now include the function name (`tool_name` from execution results),
 - Implemented Phase 4: cnctd.world server integration
 - All phases compile successfully
 - Ready for testing and deployment
+
+---
+
+## Additional Fix: Gemini Schema Sanitization (2025-01-07)
+
+### Problem
+Gemini API rejected tool schemas with HTTP 400 errors:
+- `Unknown name "$schema"`
+- `Unknown name "additionalProperties"`
+- `"type" cannot be list` (for `["string", "null"]`)
+
+### Root Cause
+MCP tools use standard JSON Schema which includes properties that Gemini's function declaration format doesn't support.
+
+### Solution
+Added `sanitize_schema_for_gemini()` function in `src/client/gemini.rs` that:
+1. Recursively removes `$schema` fields
+2. Recursively removes `additionalProperties` fields
+3. Converts `type: ["string", "null"]` arrays to single string type (first non-null)
+
+### Files Modified
+- `src/client/gemini.rs` - Added sanitization function and updated both `complete()` and `stream()` to use it
+
+### Status
+- Code compiles successfully
+- Ready for testing
