@@ -97,13 +97,45 @@ fn build_input(request: &CompletionRequest) -> Input {
 }
 
 /// Build tools for the Responses API
+/// Ensure all object schemas have a "properties" field (OpenAI Responses API requirement)
+fn ensure_properties(schema: &mut serde_json::Map<String, serde_json::Value>) {
+    // If this is an object type without properties, add empty properties
+    if let Some(serde_json::Value::String(t)) = schema.get("type") {
+        if t == "object" && !schema.contains_key("properties") {
+            schema.insert("properties".to_string(), serde_json::json!({}));
+        }
+    }
+    
+    // Recursively process nested schemas
+    if let Some(serde_json::Value::Object(props)) = schema.get_mut("properties") {
+        for (_, prop_schema) in props.iter_mut() {
+            if let serde_json::Value::Object(prop_obj) = prop_schema {
+                ensure_properties(prop_obj);
+            }
+        }
+    }
+    
+    // Handle items in arrays
+    if let Some(serde_json::Value::Object(items)) = schema.get_mut("items") {
+        ensure_properties(items);
+    }
+    
+    // Handle additionalProperties if it's an object schema
+    if let Some(serde_json::Value::Object(additional)) = schema.get_mut("additionalProperties") {
+        ensure_properties(additional);
+    }
+}
+
 fn build_tools(request: &CompletionRequest) -> Option<Vec<ToolDefinition>> {
     request.tools.as_ref().map(|tools| {
         tools.iter().map(|tool| {
+            let mut schema = (*tool.input_schema).clone();
+            ensure_properties(&mut schema);
+            
             ToolDefinition::Function(Function {
                 name: tool.name.to_string(),
                 description: tool.description.as_ref().map(|d| d.to_string()),
-                parameters: serde_json::Value::Object((*tool.input_schema).clone()),
+                parameters: serde_json::Value::Object(schema),
                 strict: false,
             })
         }).collect()
