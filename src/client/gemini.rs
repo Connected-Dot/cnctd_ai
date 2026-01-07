@@ -27,13 +27,40 @@ pub(super) async fn complete(
     for msg in request.messages.iter().filter(|m| !matches!(m.role, crate::message::Role::System)) {
         match msg.role {
             crate::message::Role::User => {
-                // Check if this is a tool result message
-                if let Some(_tool_call_id) = &msg.tool_call_id {
+                // Check for multiple tool results first (new format with function_name)
+                if let Some(tool_results) = &msg.tool_results {
+                    let mut parts = Vec::new();
+                    for result in tool_results {
+                        // Use stored function_name, or try to extract from tool_call_id prefix
+                        let function_name = result.function_name.clone()
+                            .or_else(|| {
+                                // Fallback: try to extract from ID if it starts with "gemini_call_"
+                                // This won't work for Gemini since IDs are synthetic UUIDs
+                                // But might help with manually constructed results
+                                None
+                            })
+                            .unwrap_or_else(|| "function".to_string());
+                        
+                        parts.push(serde_json::json!({
+                            "functionResponse": {
+                                "name": function_name,
+                                "response": {
+                                    "result": result.content.clone()
+                                }
+                            }
+                        }));
+                    }
+                    contents.push(serde_json::json!({
+                        "role": "user",
+                        "parts": parts
+                    }));
+                }
+                // Legacy single tool result
+                else if let Some(_tool_call_id) = &msg.tool_call_id {
                     // Gemini uses functionResponse for tool results
-                    let function_name = msg.tool_uses.as_ref()
-                        .and_then(|uses| uses.first())
-                        .map(|u| u.name.clone())
-                        .unwrap_or_else(|| "function".to_string());
+                    // Since we don't have function_name stored in legacy format,
+                    // use a generic name (this is the broken behavior we're fixing)
+                    let function_name = "function".to_string();
                     
                     contents.push(serde_json::json!({
                         "role": "user",
@@ -363,7 +390,7 @@ pub(super) async fn complete(
         content,
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
-            tool_results: None,
+        tool_results: None,
     };
     
     Ok(CompletionResponse {
@@ -401,11 +428,31 @@ pub(super) async fn stream(
     for msg in request.messages.iter().filter(|m| !matches!(m.role, crate::message::Role::System)) {
         match msg.role {
             crate::message::Role::User => {
-                if let Some(_tool_call_id) = &msg.tool_call_id {
-                    let function_name = msg.tool_uses.as_ref()
-                        .and_then(|uses| uses.first())
-                        .map(|u| u.name.clone())
-                        .unwrap_or_else(|| "function".to_string());
+                // Check for multiple tool results first (new format with function_name)
+                if let Some(tool_results) = &msg.tool_results {
+                    let mut parts = Vec::new();
+                    for result in tool_results {
+                        // Use stored function_name, or fallback to generic
+                        let function_name = result.function_name.clone()
+                            .unwrap_or_else(|| "function".to_string());
+                        
+                        parts.push(serde_json::json!({
+                            "functionResponse": {
+                                "name": function_name,
+                                "response": {
+                                    "result": result.content.clone()
+                                }
+                            }
+                        }));
+                    }
+                    contents.push(serde_json::json!({
+                        "role": "user",
+                        "parts": parts
+                    }));
+                }
+                // Legacy single tool result
+                else if let Some(_tool_call_id) = &msg.tool_call_id {
+                    let function_name = "function".to_string();
                     
                     contents.push(serde_json::json!({
                         "role": "user",

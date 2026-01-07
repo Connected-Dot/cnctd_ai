@@ -10,6 +10,9 @@ pub struct ToolResult {
     pub content: String,
     #[serde(default)]
     pub is_error: bool,
+    /// Function name - required for Gemini, optional for others
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function_name: Option<String>,
 }
 
 impl ToolResult {
@@ -18,6 +21,7 @@ impl ToolResult {
             tool_call_id: tool_call_id.into(),
             content: content.into(),
             is_error: false,
+            function_name: None,
         }
     }
     
@@ -26,7 +30,42 @@ impl ToolResult {
             tool_call_id: tool_call_id.into(),
             content: content.into(),
             is_error: true,
+            function_name: None,
         }
+    }
+    
+    /// Create a tool result with function name (required for Gemini)
+    pub fn with_name(
+        tool_call_id: impl Into<String>, 
+        content: impl Into<String>,
+        function_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            content: content.into(),
+            is_error: false,
+            function_name: Some(function_name.into()),
+        }
+    }
+    
+    /// Create an error tool result with function name
+    pub fn error_with_name(
+        tool_call_id: impl Into<String>, 
+        content: impl Into<String>,
+        function_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            content: content.into(),
+            is_error: true,
+            function_name: Some(function_name.into()),
+        }
+    }
+    
+    /// Builder method to set the function name
+    pub fn set_name(mut self, function_name: impl Into<String>) -> Self {
+        self.function_name = Some(function_name.into());
+        self
     }
 }
 

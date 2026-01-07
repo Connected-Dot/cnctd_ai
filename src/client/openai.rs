@@ -19,29 +19,44 @@ pub(super) async fn complete(
     // Convert our messages to OpenAI format
     let mut messages = Vec::new();
     for msg in &request.messages {
-        let openai_msg = match msg.role {
+        match msg.role {
             crate::message::Role::System => {
-                ChatCompletionRequestMessage::System(
+                messages.push(ChatCompletionRequestMessage::System(
                     ChatCompletionRequestSystemMessageArgs::default()
                         .content(msg.content.clone())
                         .build()?
-                )
+                ));
             }
             crate::message::Role::User => {
-                // Check if this is a tool result
-                if let Some(tool_call_id) = &msg.tool_call_id {
-                    ChatCompletionRequestMessage::Tool(
+                // Check for multiple tool results first (new format)
+                if let Some(tool_results) = &msg.tool_results {
+                    // OpenAI requires one Tool message per result
+                    for result in tool_results {
+                        messages.push(ChatCompletionRequestMessage::Tool(
+                            ChatCompletionRequestToolMessageArgs::default()
+                                .content(result.content.clone())
+                                .tool_call_id(result.tool_call_id.clone())
+                                .build()?
+                        ));
+                    }
+                    // Skip the outer message - we've expanded it into multiple Tool messages
+                    continue;
+                }
+                // Legacy single tool result
+                else if let Some(tool_call_id) = &msg.tool_call_id {
+                    messages.push(ChatCompletionRequestMessage::Tool(
                         ChatCompletionRequestToolMessageArgs::default()
                             .content(msg.content.clone())
                             .tool_call_id(tool_call_id.clone())
                             .build()?
-                    )
+                    ));
                 } else {
-                    ChatCompletionRequestMessage::User(
+                    // Regular user message
+                    messages.push(ChatCompletionRequestMessage::User(
                         ChatCompletionRequestUserMessageArgs::default()
                             .content(msg.content.clone())
                             .build()?
-                    )
+                    ));
                 }
             }
             crate::message::Role::Assistant => {
@@ -67,10 +82,9 @@ pub(super) async fn complete(
                     builder.tool_calls(tool_calls);
                 }
                 
-                ChatCompletionRequestMessage::Assistant(builder.build()?)
+                messages.push(ChatCompletionRequestMessage::Assistant(builder.build()?));
             }
-        };
-        messages.push(openai_msg);
+        }
     }
     
     // Build the request
@@ -139,7 +153,7 @@ pub(super) async fn complete(
         content: choice.message.content.clone().unwrap_or_default(),
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
-            tool_results: None,
+        tool_results: None,
     };
     
     let usage = if let Some(usage) = &response.usage {
@@ -192,29 +206,44 @@ pub(super) async fn stream(
     // Convert our messages to OpenAI format - handle tool results and tool uses
     let mut messages = Vec::new();
     for msg in &request.messages {
-        let openai_msg = match msg.role {
+        match msg.role {
             crate::message::Role::System => {
-                ChatCompletionRequestMessage::System(
+                messages.push(ChatCompletionRequestMessage::System(
                     ChatCompletionRequestSystemMessageArgs::default()
                         .content(msg.content.clone())
                         .build()?
-                )
+                ));
             }
             crate::message::Role::User => {
-                // Check if this is a tool result
-                if let Some(tool_call_id) = &msg.tool_call_id {
-                    ChatCompletionRequestMessage::Tool(
+                // Check for multiple tool results first (new format)
+                if let Some(tool_results) = &msg.tool_results {
+                    // OpenAI requires one Tool message per result
+                    for result in tool_results {
+                        messages.push(ChatCompletionRequestMessage::Tool(
+                            ChatCompletionRequestToolMessageArgs::default()
+                                .content(result.content.clone())
+                                .tool_call_id(result.tool_call_id.clone())
+                                .build()?
+                        ));
+                    }
+                    // Skip the outer message - we've expanded it into multiple Tool messages
+                    continue;
+                }
+                // Legacy single tool result
+                else if let Some(tool_call_id) = &msg.tool_call_id {
+                    messages.push(ChatCompletionRequestMessage::Tool(
                         ChatCompletionRequestToolMessageArgs::default()
                             .content(msg.content.clone())
                             .tool_call_id(tool_call_id.clone())
                             .build()?
-                    )
+                    ));
                 } else {
-                    ChatCompletionRequestMessage::User(
+                    // Regular user message
+                    messages.push(ChatCompletionRequestMessage::User(
                         ChatCompletionRequestUserMessageArgs::default()
                             .content(msg.content.clone())
                             .build()?
-                    )
+                    ));
                 }
             }
             crate::message::Role::Assistant => {
@@ -240,10 +269,9 @@ pub(super) async fn stream(
                     builder.tool_calls(tool_calls);
                 }
                 
-                ChatCompletionRequestMessage::Assistant(builder.build()?)
+                messages.push(ChatCompletionRequestMessage::Assistant(builder.build()?));
             }
-        };
-        messages.push(openai_msg);
+        }
     }
     
     // Build the request
