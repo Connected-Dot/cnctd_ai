@@ -305,7 +305,16 @@ impl CompletionStream {
                 })
             }
             ResponseEvent::ResponseOutputTextDone(e) => {
-                eprintln!("DEBUG Responses: Text done, total len={}", e.text.len());
+                eprintln!("DEBUG Responses: Text done, total len={}, accumulated={}", e.text.len(), self.accumulated_text.len());
+                // If we haven't accumulated any text via deltas, use the full text from done event
+                if self.accumulated_text.is_empty() && !e.text.is_empty() {
+                    eprintln!("DEBUG Responses: Using text from OutputTextDone since accumulated was empty");
+                    self.accumulated_text.push_str(&e.text);
+                    return Some(StreamChunk {
+                        delta: Some(e.text),
+                        finish_reason: None,
+                    });
+                }
                 None
             }
             // Handle ContentPartAdded - may contain initial text for some models
@@ -440,8 +449,9 @@ impl CompletionStream {
                     finish_reason: None,
                 })
             }
-            _ => {
-                // Other events we don't handle yet
+            other => {
+                // Log unhandled events for debugging
+                eprintln!("DEBUG Responses: Unhandled event: {:?}", other);
                 None
             }
         }
@@ -717,8 +727,11 @@ impl CompletionStream {
 
     /// Get the final response after streaming completes
     pub fn final_response(&self) -> Option<crate::response::CompletionResponse> {
+        eprintln!("DEBUG final_response: accumulated_text={} chars, tool_uses={}, finish_reason={:?}", 
+            self.accumulated_text.len(), self.tool_uses.len(), self.finish_reason);
         // Need either text or tool uses to have a response
         if self.accumulated_text.is_empty() && self.tool_uses.is_empty() {
+            eprintln!("DEBUG final_response: Returning None - no text or tool uses!");
             return None;
         }
 
