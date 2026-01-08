@@ -1,5 +1,5 @@
 //! OpenAI Responses API implementation
-//! 
+//!
 //! This module implements the newer Responses API (/v1/responses) which supports
 //! all GPT-4, GPT-4.1, GPT-5, and reasoning models (o1, o3).
 
@@ -14,6 +14,14 @@ use async_openai::types::responses::{
     Role as ResponsesRole, ToolDefinition, Function,
     OutputContent, Content,
 };
+
+/// Check if a model is a reasoning model that requires encrypted_content for multi-turn
+fn is_reasoning_model(model: &str) -> bool {
+    let model_lower = model.to_lowercase();
+    model_lower.contains("o1")
+        || model_lower.contains("o3")
+        || model_lower.contains("gpt-5")
+}
 
 /// Convert our Role to Responses API Role
 fn convert_role(role: &crate::message::Role) -> ResponsesRole {
@@ -172,8 +180,10 @@ pub(super) async fn complete(
         .input(input);
 
     // Include encrypted reasoning content for multi-turn tool calls with reasoning models (GPT-5.2-pro, o1, o3)
-    // This is required for stateless multi-turn conversations
-    builder.include(vec!["reasoning.encrypted_content".to_string()]);
+    // This is required for stateless multi-turn conversations - only for reasoning models
+    if is_reasoning_model(&config.model) {
+        builder.include(vec!["reasoning.encrypted_content".to_string()]);
+    }
 
     if let Some(t) = tools {
         builder.tools(t);
@@ -196,7 +206,7 @@ pub(super) async fn complete(
     eprintln!("DEBUG: Responses API request: {:?}", serde_json::to_string(&create_request));
 
     eprintln!("DEBUG: Sending Responses API request to model: {}", config.model);
-    
+
     let response = sdk_client
         .responses()
         .create(create_request)
@@ -292,8 +302,10 @@ pub(super) async fn stream(
         .input(input);
 
     // Include encrypted reasoning content for multi-turn tool calls with reasoning models (GPT-5.2-pro, o1, o3)
-    // This is required for stateless multi-turn conversations
-    builder.include(vec!["reasoning.encrypted_content".to_string()]);
+    // This is required for stateless multi-turn conversations - only for reasoning models
+    if is_reasoning_model(&config.model) {
+        builder.include(vec!["reasoning.encrypted_content".to_string()]);
+    }
 
     if let Some(t) = tools {
         builder.tools(t);
