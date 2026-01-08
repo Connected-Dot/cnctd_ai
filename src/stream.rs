@@ -308,6 +308,40 @@ impl CompletionStream {
                 eprintln!("DEBUG Responses: Text done, total len={}", e.text.len());
                 None
             }
+            // Handle ContentPartAdded - may contain initial text for some models
+            ResponseEvent::ResponseContentPartAdded(e) => {
+                eprintln!("DEBUG Responses: Content part added, type={}", e.part.part_type);
+                if let Some(text) = &e.part.text {
+                    if !text.is_empty() {
+                        eprintln!("DEBUG Responses: ContentPartAdded has text len={}", text.len());
+                        self.accumulated_text.push_str(text);
+                        return Some(StreamChunk {
+                            delta: Some(text.clone()),
+                            finish_reason: None,
+                        });
+                    }
+                }
+                None
+            }
+            // Handle ContentPartDone - contains complete text for some models (like GPT-5.2)
+            ResponseEvent::ResponseContentPartDone(e) => {
+                eprintln!("DEBUG Responses: Content part done, type={}", e.part.part_type);
+                if let Some(text) = &e.part.text {
+                    // Only add if we haven't already accumulated this text
+                    // (some models send both delta and done events)
+                    if !text.is_empty() && self.accumulated_text.is_empty() {
+                        eprintln!("DEBUG Responses: ContentPartDone has text len={}, accumulated was empty", text.len());
+                        self.accumulated_text.push_str(text);
+                        return Some(StreamChunk {
+                            delta: Some(text.clone()),
+                            finish_reason: None,
+                        });
+                    } else if !text.is_empty() {
+                        eprintln!("DEBUG Responses: ContentPartDone has text but accumulated already has {} chars", self.accumulated_text.len());
+                    }
+                }
+                None
+            }
             ResponseEvent::ResponseFunctionCallArgumentsDelta(e) => {
                 eprintln!("DEBUG Responses: Function args delta, item_id={}", e.item_id);
                 // Accumulate function call arguments
