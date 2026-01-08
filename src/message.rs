@@ -223,6 +223,13 @@ impl Message {
         
         results
     }
+
+    /// Set reasoning items for OpenAI Responses API (GPT-5.2-pro)
+    /// Required for multi-turn tool calls with reasoning models
+    pub fn with_reasoning_items(mut self, items: Vec<serde_json::Value>) -> Self {
+        self.reasoning_items = Some(items);
+        self
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
