@@ -13,6 +13,10 @@ pub struct ToolResult {
     /// Function name - required for Gemini, optional for others
     #[serde(skip_serializing_if = "Option::is_none")]
     pub function_name: Option<String>,
+    /// OpenAI Responses API call_id (call_...) for function_call_output matching
+    /// When present, this is used instead of tool_call_id for OpenAI Responses API
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
 }
 
 impl ToolResult {
@@ -22,6 +26,7 @@ impl ToolResult {
             content: content.into(),
             is_error: false,
             function_name: None,
+            call_id: None,
         }
     }
     
@@ -31,6 +36,7 @@ impl ToolResult {
             content: content.into(),
             is_error: true,
             function_name: None,
+            call_id: None,
         }
     }
     
@@ -45,6 +51,7 @@ impl ToolResult {
             content: content.into(),
             is_error: false,
             function_name: Some(function_name.into()),
+            call_id: None,
         }
     }
     
@@ -59,6 +66,7 @@ impl ToolResult {
             content: content.into(),
             is_error: true,
             function_name: Some(function_name.into()),
+            call_id: None,
         }
     }
     
@@ -66,6 +74,18 @@ impl ToolResult {
     pub fn set_name(mut self, function_name: impl Into<String>) -> Self {
         self.function_name = Some(function_name.into());
         self
+    }
+    
+    /// Builder method to set the OpenAI Responses API call_id
+    pub fn set_call_id(mut self, call_id: impl Into<String>) -> Self {
+        self.call_id = Some(call_id.into());
+        self
+    }
+    
+    /// Get the effective call_id for OpenAI Responses API
+    /// Returns call_id if present, otherwise falls back to tool_call_id
+    pub fn effective_call_id(&self) -> &str {
+        self.call_id.as_deref().unwrap_or(&self.tool_call_id)
     }
 }
 

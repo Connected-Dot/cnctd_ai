@@ -39,10 +39,10 @@ fn build_input(request: &CompletionRequest) -> Input {
                         // Use tool_call_id which should now contain the call_id (call_...) format
                         let output_item = serde_json::json!({
                             "type": "function_call_output",
-                            "call_id": result.tool_call_id,
+                            "call_id": result.effective_call_id(),
                             "output": result.content
                         });
-                        eprintln!("DEBUG Responses: Building function_call_output with call_id={}", result.tool_call_id);
+                        eprintln!("DEBUG Responses: Building function_call_output with call_id={}", result.effective_call_id());
                         items.push(InputItem::Custom(output_item));
                     }
                     continue;
