@@ -214,8 +214,9 @@ pub(super) async fn complete(
                 }
             }
             OutputContent::FunctionCall(fc) => {
-                tool_uses.push(crate::ToolUse { call_id: None,
-                    id: fc.call_id.clone(),
+                tool_uses.push(crate::ToolUse {
+                    id: fc.id.clone(),
+                    call_id: Some(fc.call_id.clone()),
                     name: fc.name.clone(),
                     input: serde_json::from_str(&fc.arguments)
                         .unwrap_or_else(|_| serde_json::Value::String(fc.arguments.clone())),
