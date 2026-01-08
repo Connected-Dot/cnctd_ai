@@ -36,6 +36,8 @@ pub struct CompletionStream {
     accumulated_function_args: std::collections::HashMap<String, String>,
     /// Pending function names from OutputItemAdded (before arguments arrive)
     pending_function_names: std::collections::HashMap<String, String>,
+    /// Pending call_ids from OutputItemAdded (for OpenAI Responses API)
+    pending_call_ids: std::collections::HashMap<String, String>,
 }
 
 impl CompletionStream {
@@ -60,6 +62,7 @@ impl CompletionStream {
             google_maps_widget_token: None,
             accumulated_function_args: std::collections::HashMap::new(),
             pending_function_names: std::collections::HashMap::new(),
+            pending_call_ids: std::collections::HashMap::new(),
         }
     }
 
@@ -79,6 +82,7 @@ impl CompletionStream {
             google_maps_widget_token: None,
             accumulated_function_args: std::collections::HashMap::new(),
             pending_function_names: std::collections::HashMap::new(),
+            pending_call_ids: std::collections::HashMap::new(),
         }
     }
 
@@ -99,6 +103,7 @@ impl CompletionStream {
             google_maps_widget_token: None,
             accumulated_function_args: std::collections::HashMap::new(),
             pending_function_names: std::collections::HashMap::new(),
+            pending_call_ids: std::collections::HashMap::new(),
         }
     }
 
@@ -120,6 +125,7 @@ impl CompletionStream {
             google_maps_widget_token: None,
             accumulated_function_args: std::collections::HashMap::new(),
             pending_function_names: std::collections::HashMap::new(),
+            pending_call_ids: std::collections::HashMap::new(),
         }
     }
 
@@ -306,8 +312,9 @@ impl CompletionStream {
                 eprintln!("DEBUG Responses: Output item added, index={}", e.output_index);
                 // Capture function name for later use in Unknown event parsing
                 if let async_openai::types::responses::OutputItem::FunctionCall(fc) = &e.item {
-                    eprintln!("DEBUG Responses: OutputItemAdded FunctionCall id={}, name={}", fc.id, fc.name);
+                    eprintln!("DEBUG Responses: OutputItemAdded FunctionCall id={}, call_id={}, name={}", fc.id, fc.call_id, fc.name);
                     self.pending_function_names.insert(fc.id.clone(), fc.name.clone());
+                    self.pending_call_ids.insert(fc.id.clone(), fc.call_id.clone());
                 }
                 None
             }
@@ -378,8 +385,12 @@ impl CompletionStream {
                 // Create tool use from accumulated arguments
                 let args_value: serde_json::Value = serde_json::from_str(&e.arguments)
                     .unwrap_or_else(|_| serde_json::Value::String(e.arguments.clone()));
-                self.tool_uses.push(crate::tool::ToolUse { call_id: None,
+                // Get the call_id from OutputItemAdded (required for function_call_output)
+                let call_id = self.pending_call_ids.get(&e.item_id).cloned();
+                eprintln!("DEBUG Responses: Creating ToolUse: id={}, call_id={:?}", e.item_id, call_id);
+                self.tool_uses.push(crate::tool::ToolUse {
                     id: e.item_id.clone(),
+                    call_id,
                     name: e.name,
                     input: args_value,
                 });
@@ -488,8 +499,12 @@ impl CompletionStream {
                             if !self.tool_uses.iter().any(|tu| tu.id == item_id) {
                                 // We need the name - check if we stored it from OutputItemAdded
                                 if let Some(name) = self.pending_function_names.get(item_id) {
-                                    self.tool_uses.push(crate::tool::ToolUse { call_id: None,
+                                    // Get the call_id from OutputItemAdded (required for function_call_output)
+                                    let call_id = self.pending_call_ids.get(item_id).cloned();
+                                    eprintln!("DEBUG Responses: Creating ToolUse from Unknown event: id={}, call_id={:?}, name={}", item_id, call_id, name);
+                                    self.tool_uses.push(crate::tool::ToolUse {
                                         id: item_id.to_string(),
+                                        call_id,
                                         name: name.clone(),
                                         input: args_value,
                                     });
