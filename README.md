@@ -221,6 +221,46 @@ let tool = create_tool(name, description, schema)?;
 let tool = create_tool_borrowed(name, description, schema)?;
 ```
 
+## OpenAI Responses API & Multi-Turn Tool Calls
+
+cnctd_ai uses OpenAI's newer **Responses API** (`/v1/responses`) for GPT-4, GPT-4.1, GPT-5, and reasoning models (o1, o3). This provides better tool calling support but has specific requirements for multi-turn conversations:
+
+### Key Concepts
+
+- **`call_id`**: OpenAI uses `call_id` (format: `call_...`) to match `function_call` items with their `function_call_output` responses
+- **`ToolUse.call_id`**: The library captures this from API responses and stores it in `ToolUse.call_id`
+- **`ToolResult.effective_call_id()`**: Returns the correct ID to use when sending tool results back
+
+### Reasoning Models (GPT-5.2-pro, o1, o3)
+
+Reasoning models require special handling for multi-turn tool calls:
+
+1. **Encrypted reasoning content**: The library automatically requests `reasoning.encrypted_content` for reasoning models
+2. **Reasoning items**: Must be echoed back in continuation requests via `Message.reasoning_items`
+
+The library handles this automatically - just ensure you preserve `reasoning_items` when building continuation messages:
+
+```rust
+// After getting a response with tool calls
+let response = client.complete(request).await?;
+
+// The response.message includes reasoning_items if present
+// When building the next request, include the full message
+messages.push(response.message.clone());
+
+// Add tool results
+let tool_result = ToolResult::new(tool_use.call_id.unwrap_or(tool_use.id), output);
+messages.push(Message::tool_results(vec![tool_result]));
+```
+
+### Application Considerations
+
+When persisting and reconstructing conversations from a database:
+
+1. **Store `call_id`**: Save both `tool_use_id` and `call_id` from tool calls
+2. **Match 1:1**: Every `function_call` must have a matching `function_call_output`
+3. **Preserve reasoning**: Store and restore `reasoning_items` for reasoning models
+
 ## Error Handling
 
 The library provides comprehensive error types:

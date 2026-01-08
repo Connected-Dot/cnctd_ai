@@ -242,10 +242,39 @@ match client.complete(request).await {
 Different providers handle tool calls differently. Key considerations:
 
 - **Anthropic**: Native tool_use/tool_result content blocks
-- **OpenAI**: Function calls with tool_call_id tracking
+- **OpenAI**: Function calls with tool_call_id tracking (uses Responses API)
 - **Gemini**: Function declarations with grounding metadata
 
 The library normalizes these differences through the unified `Content` enum.
+
+## OpenAI Responses API Details
+
+cnctd_ai uses the newer **Responses API** (`/v1/responses`) for OpenAI models. Key implementation details:
+
+### Files
+- `src/client/openai_responses.rs` - Request building and response parsing
+- `src/stream.rs` - Streaming response handling (captures `call_id`, `reasoning_items`)
+
+### Multi-Turn Tool Calls
+For multi-turn tool calls to work:
+
+1. **call_id tracking**: `ToolUse.call_id` captures the `call_...` format ID from OpenAI
+2. **function_call_output matching**: Use `ToolResult.effective_call_id()` when sending results back
+3. **1:1 matching**: Every `function_call` in a request must have a matching `function_call_output`
+
+### Reasoning Models (GPT-5.2-pro, o1, o3)
+Reasoning models require additional handling:
+
+1. `is_reasoning_model()` helper in `openai_responses.rs` detects o1/o3/gpt-5 models
+2. Automatically includes `reasoning.encrypted_content` in requests for these models
+3. Captures `encrypted_content` from reasoning items in streaming responses
+4. `Message.reasoning_items` must be preserved and echoed back in continuations
+
+### Application Responsibility
+When persisting conversations to a database, applications must:
+- Store `call_id` alongside `tool_use_id`
+- Ensure every reconstructed `function_call` has a matching `function_call_output`
+- Preserve `reasoning_items` for reasoning model conversations
 
 ## Development
 
