@@ -346,7 +346,7 @@ pub(super) async fn complete(
             // Generate a unique ID for the tool call (Gemini doesn't provide one)
             let id = format!("gemini_call_{}", uuid::Uuid::new_v4());
             
-            tool_uses.push(crate::ToolUse {
+            tool_uses.push(crate::ToolUse { call_id: None,
                 id,
                 name,
                 input: args,

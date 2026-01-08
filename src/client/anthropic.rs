@@ -118,7 +118,7 @@ pub(super) async fn complete(
                 content.push_str(text);
             }
             anthropic_sdk::ContentBlock::ToolUse { id, name, input } => {
-                tool_uses.push(crate::ToolUse {
+                tool_uses.push(crate::ToolUse { call_id: None,
                     id: id.clone(),
                     name: name.clone(),
                     input: input.clone(),

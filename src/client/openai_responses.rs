@@ -36,11 +36,13 @@ fn build_input(request: &CompletionRequest) -> Input {
                     // For tool results, we need to provide function call outputs
                     for result in tool_results {
                         // Build a function_call_output item
+                        // Use tool_call_id which should now contain the call_id (call_...) format
                         let output_item = serde_json::json!({
                             "type": "function_call_output",
                             "call_id": result.tool_call_id,
                             "output": result.content
                         });
+                        eprintln!("DEBUG Responses: Building function_call_output with call_id={}", result.tool_call_id);
                         items.push(InputItem::Custom(output_item));
                     }
                     continue;
@@ -68,10 +70,15 @@ fn build_input(request: &CompletionRequest) -> Input {
                 // For assistant messages with tool uses, include the function calls
                 if let Some(tool_uses) = &msg.tool_uses {
                     for tu in tool_uses {
+                        // For OpenAI Responses API:
+                        // - id field must be the fc_... format (tu.id)
+                        // - call_id field should be the call_... format (tu.call_id)
+                        let call_id = tu.call_id.as_ref().unwrap_or(&tu.id);
+                        eprintln!("DEBUG Responses: Building function_call with id={}, call_id={}", tu.id, call_id);
                         let func_call = serde_json::json!({
                             "type": "function_call",
                             "id": tu.id,
-                            "call_id": tu.id,
+                            "call_id": call_id,
                             "name": tu.name,
                             "arguments": tu.input.to_string(),
                             "status": "completed"
@@ -199,7 +206,7 @@ pub(super) async fn complete(
                 }
             }
             OutputContent::FunctionCall(fc) => {
-                tool_uses.push(crate::ToolUse {
+                tool_uses.push(crate::ToolUse { call_id: None,
                     id: fc.call_id.clone(),
                     name: fc.name.clone(),
                     input: serde_json::from_str(&fc.arguments)

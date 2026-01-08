@@ -34,6 +34,8 @@ pub struct CompletionStream {
     google_maps_widget_token: Option<String>,
     /// Accumulated function call arguments (for OpenAI Responses API)
     accumulated_function_args: std::collections::HashMap<String, String>,
+    /// Pending function names from OutputItemAdded (before arguments arrive)
+    pending_function_names: std::collections::HashMap<String, String>,
 }
 
 impl CompletionStream {
@@ -57,6 +59,7 @@ impl CompletionStream {
             code_execution_results: Vec::new(),
             google_maps_widget_token: None,
             accumulated_function_args: std::collections::HashMap::new(),
+            pending_function_names: std::collections::HashMap::new(),
         }
     }
 
@@ -75,6 +78,7 @@ impl CompletionStream {
             code_execution_results: Vec::new(),
             google_maps_widget_token: None,
             accumulated_function_args: std::collections::HashMap::new(),
+            pending_function_names: std::collections::HashMap::new(),
         }
     }
 
@@ -94,6 +98,7 @@ impl CompletionStream {
             code_execution_results: Vec::new(),
             google_maps_widget_token: None,
             accumulated_function_args: std::collections::HashMap::new(),
+            pending_function_names: std::collections::HashMap::new(),
         }
     }
 
@@ -114,6 +119,7 @@ impl CompletionStream {
             code_execution_results: Vec::new(),
             google_maps_widget_token: None,
             accumulated_function_args: std::collections::HashMap::new(),
+            pending_function_names: std::collections::HashMap::new(),
         }
     }
 
@@ -168,7 +174,7 @@ impl CompletionStream {
                                     for tool_call in tool_calls {
                                         if let Some(function) = &tool_call.function {
                                             if let Some(name) = &function.name {
-                                                self.tool_uses.push(crate::tool::ToolUse {
+                                                self.tool_uses.push(crate::tool::ToolUse { call_id: None,
                                                     id: tool_call.id.clone().unwrap_or_default(),
                                                     name: name.clone(),
                                                     input: serde_json::json!({}),
@@ -296,6 +302,15 @@ impl CompletionStream {
                 eprintln!("DEBUG Responses: In progress");
                 None
             }
+            ResponseEvent::ResponseOutputItemAdded(e) => {
+                eprintln!("DEBUG Responses: Output item added, index={}", e.output_index);
+                // Capture function name for later use in Unknown event parsing
+                if let async_openai::types::responses::OutputItem::FunctionCall(fc) = &e.item {
+                    eprintln!("DEBUG Responses: OutputItemAdded FunctionCall id={}, name={}", fc.id, fc.name);
+                    self.pending_function_names.insert(fc.id.clone(), fc.name.clone());
+                }
+                None
+            }
             ResponseEvent::ResponseOutputTextDelta(e) => {
                 eprintln!("DEBUG Responses: Text delta len={}", e.delta.len());
                 self.accumulated_text.push_str(&e.delta);
@@ -363,7 +378,7 @@ impl CompletionStream {
                 // Create tool use from accumulated arguments
                 let args_value: serde_json::Value = serde_json::from_str(&e.arguments)
                     .unwrap_or_else(|_| serde_json::Value::String(e.arguments.clone()));
-                self.tool_uses.push(crate::tool::ToolUse {
+                self.tool_uses.push(crate::tool::ToolUse { call_id: None,
                     id: e.item_id.clone(),
                     name: e.name,
                     input: args_value,
@@ -376,10 +391,12 @@ impl CompletionStream {
                 if let async_openai::types::responses::OutputItem::FunctionCall(fc) = e.item {
                     let args_value: serde_json::Value = serde_json::from_str(&fc.arguments)
                         .unwrap_or_else(|_| serde_json::Value::String(fc.arguments.clone()));
-                    // Only add if not already present
-                    if !self.tool_uses.iter().any(|tu| tu.id == fc.call_id) {
+                    eprintln!("DEBUG Responses: FunctionCall id={}, call_id={}, name={}", fc.id, fc.call_id, fc.name);
+                    // Only add if not already present (check both ids)
+                    if !self.tool_uses.iter().any(|tu| tu.id == fc.id) {
                         self.tool_uses.push(crate::tool::ToolUse {
-                            id: fc.call_id,
+                            id: fc.id,           // Use fc.id (fc_...) for primary ID
+                            call_id: Some(fc.call_id), // Store call_id for function_call_output
                             name: fc.name,
                             input: args_value,
                         });
@@ -449,9 +466,45 @@ impl CompletionStream {
                     finish_reason: None,
                 })
             }
+            ResponseEvent::Unknown(val) => {
+                // Try to parse unknown events - async-openai might have version mismatches
+                eprintln!("DEBUG Responses: Unknown event: {}", val);
+                
+                // Check if this is a function_call_arguments.done that failed to parse
+                // (async-openai expects 'name' field but OpenAI may not send it)
+                if let Some(event_type) = val.get("type").and_then(|v| v.as_str()) {
+                    if event_type == "response.function_call_arguments.done" {
+                        if let (Some(item_id), Some(arguments)) = (
+                            val.get("item_id").and_then(|v| v.as_str()),
+                            val.get("arguments").and_then(|v| v.as_str())
+                        ) {
+                            eprintln!("DEBUG Responses: Parsed function_call_arguments.done from Unknown: item_id={}, args_len={}", item_id, arguments.len());
+                            // Get function name from accumulated_function_args or use placeholder
+                            let args_value: serde_json::Value = serde_json::from_str(arguments)
+                                .unwrap_or_else(|_| serde_json::Value::String(arguments.to_string()));
+                            
+                            // Look for existing tool use with this item_id and update it
+                            // Or add if not present (name will be from OutputItemAdded event)
+                            if !self.tool_uses.iter().any(|tu| tu.id == item_id) {
+                                // We need the name - check if we stored it from OutputItemAdded
+                                if let Some(name) = self.pending_function_names.get(item_id) {
+                                    self.tool_uses.push(crate::tool::ToolUse { call_id: None,
+                                        id: item_id.to_string(),
+                                        name: name.clone(),
+                                        input: args_value,
+                                    });
+                                } else {
+                                    eprintln!("DEBUG Responses: No function name found for item_id={}", item_id);
+                                }
+                            }
+                        }
+                    }
+                }
+                None
+            }
             other => {
                 // Log unhandled events for debugging
-                eprintln!("DEBUG Responses: Unhandled event: {:?}", other);
+                eprintln!("DEBUG Responses: Unhandled event variant: {:?}", other);
                 None
             }
         }
@@ -490,7 +543,7 @@ impl CompletionStream {
                         // Create a new tool use with id and name
                         let id = content_block["id"].as_str().unwrap_or("").to_string();
                         let name = content_block["name"].as_str().unwrap_or("").to_string();
-                        self.tool_uses.push(crate::tool::ToolUse {
+                        self.tool_uses.push(crate::tool::ToolUse { call_id: None,
                             id,
                             name,
                             input: serde_json::json!({}), // Will be filled by deltas
@@ -632,7 +685,7 @@ impl CompletionStream {
                 // Generate a unique ID (Gemini doesn't provide one)
                 let id = format!("gemini_call_{}", uuid::Uuid::new_v4());
                 
-                self.tool_uses.push(crate::tool::ToolUse {
+                self.tool_uses.push(crate::tool::ToolUse { call_id: None,
                     id,
                     name,
                     input: args,

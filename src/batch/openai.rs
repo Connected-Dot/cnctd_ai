@@ -350,6 +350,7 @@ fn parse_completion_from_body(body: &serde_json::Value) -> Result<crate::respons
 
                     Some(crate::ToolUse {
                         id: id.to_string(),
+                        call_id: None,
                         name: name.to_string(),
                         input: serde_json::from_str(arguments).ok()?,
                     })

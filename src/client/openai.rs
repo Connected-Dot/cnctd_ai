@@ -140,7 +140,7 @@ pub(super) async fn complete(
     
     // Extract tool calls if present
     let tool_uses_opt = choice.message.tool_calls.as_ref().map(|calls| {
-        calls.iter().map(|call| crate::ToolUse {
+        calls.iter().map(|call| crate::ToolUse { call_id: None,
             id: call.id.clone(),
             name: call.function.name.clone(),
             input: serde_json::from_str(&call.function.arguments)

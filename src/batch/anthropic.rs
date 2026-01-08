@@ -447,7 +447,7 @@ fn convert_result_line(line: AnthropicBatchResultLine) -> BatchResult {
                         content.push_str(&text);
                     }
                     AnthropicContentBlock::ToolUse { id, name, input } => {
-                        tool_uses.push(ToolUse { id, name, input });
+                        tool_uses.push(ToolUse { id, call_id: None, name, input });
                     }
                 }
             }
