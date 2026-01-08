@@ -140,6 +140,7 @@ pub(super) async fn complete(
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
             tool_results: None,
+            reasoning_items: None,
     };
     
     let usage = crate::response::Usage {
@@ -165,6 +166,7 @@ pub(super) async fn complete(
         grounding_metadata: None,
         code_execution_results: None,
         google_maps_widget_token: None,
+        reasoning_items: None,
     })
 }
 

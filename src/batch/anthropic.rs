@@ -469,6 +469,7 @@ fn convert_result_line(line: AnthropicBatchResultLine) -> BatchResult {
                     tool_uses: tool_uses_opt.clone(),
                     tool_call_id: None,
             tool_results: None,
+            reasoning_items: None,
                 },
                 usage: Usage {
                     prompt_tokens: msg.usage.input_tokens,
@@ -481,6 +482,7 @@ fn convert_result_line(line: AnthropicBatchResultLine) -> BatchResult {
                 grounding_metadata: None,
         code_execution_results: None,
         google_maps_widget_token: None,
+        reasoning_items: None,
             })
         } else {
             BatchResultType::Error(BatchItemError {

@@ -82,6 +82,9 @@ pub struct Message {
     /// Multiple tool results in one message (Anthropic API requirement)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tool_results: Option<Vec<ToolResult>>,
+    /// Reasoning items for OpenAI Responses API (GPT-5.2-pro)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_items: Option<Vec<serde_json::Value>>,
 }
 
 impl Message {
@@ -92,6 +95,7 @@ impl Message {
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
+            reasoning_items: None,
         }
     }
     
@@ -102,6 +106,7 @@ impl Message {
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
+            reasoning_items: None,
         }
     }
     
@@ -112,6 +117,7 @@ impl Message {
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
+            reasoning_items: None,
         }
     }
     
@@ -123,6 +129,7 @@ impl Message {
             tool_uses: Some(vec![tool_use]),
             tool_call_id: None,
             tool_results: None,
+            reasoning_items: None,
         }
     }
     
@@ -134,6 +141,7 @@ impl Message {
             tool_uses: if tool_uses.is_empty() { None } else { Some(tool_uses) },
             tool_call_id: None,
             tool_results: None,
+            reasoning_items: None,
         }
     }
     
@@ -145,6 +153,7 @@ impl Message {
             tool_uses: if tool_uses.is_empty() { None } else { Some(tool_uses) },
             tool_call_id: None,
             tool_results: None,
+            reasoning_items: None,
         }
     }
     
@@ -156,6 +165,7 @@ impl Message {
             tool_uses: None,
             tool_call_id: Some(tool_call_id),
             tool_results: None,
+            reasoning_items: None,
         }
     }
     
@@ -168,6 +178,7 @@ impl Message {
             tool_uses: None,
             tool_call_id: None,
             tool_results: if results.is_empty() { None } else { Some(results) },
+            reasoning_items: None,
         }
     }
     

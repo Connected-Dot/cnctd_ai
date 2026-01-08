@@ -38,6 +38,8 @@ pub struct CompletionStream {
     pending_function_names: std::collections::HashMap<String, String>,
     /// Pending call_ids from OutputItemAdded (for OpenAI Responses API)
     pending_call_ids: std::collections::HashMap<String, String>,
+    /// Reasoning items that must be echoed back in continuation requests (GPT-5.2-pro)
+    reasoning_items: Vec<serde_json::Value>,
 }
 
 impl CompletionStream {
@@ -63,6 +65,7 @@ impl CompletionStream {
             accumulated_function_args: std::collections::HashMap::new(),
             pending_function_names: std::collections::HashMap::new(),
             pending_call_ids: std::collections::HashMap::new(),
+            reasoning_items: Vec::new(),
         }
     }
 
@@ -83,6 +86,7 @@ impl CompletionStream {
             accumulated_function_args: std::collections::HashMap::new(),
             pending_function_names: std::collections::HashMap::new(),
             pending_call_ids: std::collections::HashMap::new(),
+            reasoning_items: Vec::new(),
         }
     }
 
@@ -104,6 +108,7 @@ impl CompletionStream {
             accumulated_function_args: std::collections::HashMap::new(),
             pending_function_names: std::collections::HashMap::new(),
             pending_call_ids: std::collections::HashMap::new(),
+            reasoning_items: Vec::new(),
         }
     }
 
@@ -126,6 +131,7 @@ impl CompletionStream {
             accumulated_function_args: std::collections::HashMap::new(),
             pending_function_names: std::collections::HashMap::new(),
             pending_call_ids: std::collections::HashMap::new(),
+            reasoning_items: Vec::new(),
         }
     }
 
@@ -398,6 +404,24 @@ impl CompletionStream {
             }
             ResponseEvent::ResponseOutputItemDone(e) => {
                 eprintln!("DEBUG Responses: Output item done, index={}", e.output_index);
+                
+                // Capture reasoning items for continuation requests (GPT-5.2-pro requirement)
+                if let async_openai::types::responses::OutputItem::Reasoning(ref reasoning) = e.item {
+                    eprintln!("DEBUG Responses: Captured reasoning item id={}", reasoning.id);
+                    // Store as JSON for echoing back in continuation
+                    let reasoning_json = serde_json::json!({
+                        "type": "reasoning",
+                        "id": reasoning.id,
+                        "summary": reasoning.summary.iter().map(|s| {
+                            serde_json::json!({
+                                "type": "summary_text",
+                                "text": s.text.clone()
+                            })
+                        }).collect::<Vec<_>>()
+                    });
+                    self.reasoning_items.push(reasoning_json);
+                }
+                
                 // Handle function calls from output item
                 if let async_openai::types::responses::OutputItem::FunctionCall(fc) = e.item {
                     let args_value: serde_json::Value = serde_json::from_str(&fc.arguments)
@@ -822,6 +846,7 @@ impl CompletionStream {
                 tool_uses: tool_uses_opt.clone(),
                 tool_call_id: None,
                 tool_results: None,
+                reasoning_items: if self.reasoning_items.is_empty() { None } else { Some(self.reasoning_items.clone()) },
             },
             usage: self.usage.clone().unwrap_or(crate::response::Usage {
                 prompt_tokens: 0,
@@ -834,6 +859,7 @@ impl CompletionStream {
             grounding_metadata: self.grounding_metadata.clone(),
             code_execution_results: code_results_opt,
             google_maps_widget_token: self.google_maps_widget_token.clone(),
+            reasoning_items: if self.reasoning_items.is_empty() { None } else { Some(self.reasoning_items.clone()) },
         })
     }
 

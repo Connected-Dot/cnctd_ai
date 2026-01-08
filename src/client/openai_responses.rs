@@ -67,6 +67,14 @@ fn build_input(request: &CompletionRequest) -> Input {
                 items.push(InputItem::Message(input_msg));
             }
             crate::message::Role::Assistant => {
+                // Include reasoning items FIRST (required for GPT-5.2-pro before function calls)
+                if let Some(reasoning_items) = &msg.reasoning_items {
+                    for reasoning in reasoning_items {
+                        eprintln!("DEBUG Responses: Including reasoning item in request: {:?}", reasoning.get("id"));
+                        items.push(InputItem::Custom(reasoning.clone()));
+                    }
+                }
+                
                 // For assistant messages with tool uses, include the function calls
                 if let Some(tool_uses) = &msg.tool_uses {
                     for tu in tool_uses {
@@ -225,6 +233,7 @@ pub(super) async fn complete(
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
         tool_results: None,
+            reasoning_items: None,
     };
     
     let usage = if let Some(u) = &response.usage {
@@ -259,6 +268,7 @@ pub(super) async fn complete(
         grounding_metadata: None,
         code_execution_results: None,
         google_maps_widget_token: None,
+        reasoning_items: None,
     })
 }
 

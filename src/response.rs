@@ -18,6 +18,10 @@ pub struct CompletionResponse {
     /// Google Maps widget context token for rendering interactive widgets
     #[serde(skip_serializing_if = "Option::is_none")]
     pub google_maps_widget_token: Option<String>,
+    /// Reasoning items that must be echoed back in continuation requests (GPT-5.2-pro)
+    /// Stored as raw JSON values to preserve exact format
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_items: Option<Vec<serde_json::Value>>,
 }
 
 impl CompletionResponse {

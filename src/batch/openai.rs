@@ -368,6 +368,7 @@ fn parse_completion_from_body(body: &serde_json::Value) -> Result<crate::respons
             tool_uses: tool_uses_opt.clone(),
             tool_call_id: None,
             tool_results: None,
+            reasoning_items: None,
         },
         usage,
         finish_reason,
@@ -380,6 +381,7 @@ fn parse_completion_from_body(body: &serde_json::Value) -> Result<crate::respons
         grounding_metadata: None,
         code_execution_results: None,
         google_maps_widget_token: None,
+        reasoning_items: None,
     })
 }
 

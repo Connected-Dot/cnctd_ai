@@ -448,6 +448,7 @@ pub(super) async fn complete(
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
         tool_results: None,
+            reasoning_items: None,
     };
     
     Ok(CompletionResponse {
@@ -459,6 +460,7 @@ pub(super) async fn complete(
         grounding_metadata,
         code_execution_results: code_results_opt,
         google_maps_widget_token,
+        reasoning_items: None,
     })
 }
 
