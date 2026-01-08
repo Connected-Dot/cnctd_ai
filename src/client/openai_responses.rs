@@ -170,11 +170,15 @@ pub(super) async fn complete(
     builder
         .model(&config.model)
         .input(input);
-    
+
+    // Include encrypted reasoning content for multi-turn tool calls with reasoning models (GPT-5.2-pro, o1, o3)
+    // This is required for stateless multi-turn conversations
+    builder.include(vec!["reasoning.encrypted_content".to_string()]);
+
     if let Some(t) = tools {
         builder.tools(t);
     }
-    
+
     // Apply options
     if let Some(opts) = &request.options {
         if let Some(temp) = opts.temperature {
@@ -187,10 +191,10 @@ pub(super) async fn complete(
             builder.top_p(top_p);
         }
     }
-    
+
     let create_request = builder.build()?;
     eprintln!("DEBUG: Responses API request: {:?}", serde_json::to_string(&create_request));
-    
+
     eprintln!("DEBUG: Sending Responses API request to model: {}", config.model);
     
     let response = sdk_client
@@ -281,16 +285,20 @@ pub(super) async fn stream(
 ) -> Result<CompletionStream> {
     let input = build_input(request);
     let tools = build_tools(request);
-    
+
     let mut builder = CreateResponseArgs::default();
     builder
         .model(&config.model)
         .input(input);
-    
+
+    // Include encrypted reasoning content for multi-turn tool calls with reasoning models (GPT-5.2-pro, o1, o3)
+    // This is required for stateless multi-turn conversations
+    builder.include(vec!["reasoning.encrypted_content".to_string()]);
+
     if let Some(t) = tools {
         builder.tools(t);
     }
-    
+
     // Apply options
     if let Some(opts) = &request.options {
         if let Some(temp) = opts.temperature {
@@ -303,10 +311,10 @@ pub(super) async fn stream(
             builder.top_p(top_p);
         }
     }
-    
+
     let create_request = builder.build()?;
     eprintln!("DEBUG: Responses API request: {:?}", serde_json::to_string(&create_request));
-    
+
     eprintln!("DEBUG: Creating Responses API stream for model: {}", config.model);
     
     let stream = sdk_client

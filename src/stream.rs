@@ -406,10 +406,13 @@ impl CompletionStream {
                 eprintln!("DEBUG Responses: Output item done, index={}", e.output_index);
                 
                 // Capture reasoning items for continuation requests (GPT-5.2-pro requirement)
+                // Must include encrypted_content for multi-turn stateless conversations
                 if let async_openai::types::responses::OutputItem::Reasoning(ref reasoning) = e.item {
-                    eprintln!("DEBUG Responses: Captured reasoning item id={}", reasoning.id);
+                    eprintln!("DEBUG Responses: Captured reasoning item id={}, has_encrypted_content={}",
+                        reasoning.id, reasoning.encrypted_content.is_some());
                     // Store as JSON for echoing back in continuation
-                    let reasoning_json = serde_json::json!({
+                    // Include encrypted_content if present (required for multi-turn tool calls)
+                    let mut reasoning_json = serde_json::json!({
                         "type": "reasoning",
                         "id": reasoning.id,
                         "summary": reasoning.summary.iter().map(|s| {
@@ -419,6 +422,10 @@ impl CompletionStream {
                             })
                         }).collect::<Vec<_>>()
                     });
+                    // Add encrypted_content if present
+                    if let Some(ref encrypted) = reasoning.encrypted_content {
+                        reasoning_json["encrypted_content"] = serde_json::json!(encrypted);
+                    }
                     self.reasoning_items.push(reasoning_json);
                 }
                 
