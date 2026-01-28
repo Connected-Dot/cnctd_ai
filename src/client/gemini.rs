@@ -89,7 +89,7 @@ pub(super) async fn complete(
                                 None
                             })
                             .unwrap_or_else(|| "function".to_string());
-                        
+
                         parts.push(serde_json::json!({
                             "functionResponse": {
                                 "name": function_name,
@@ -110,7 +110,7 @@ pub(super) async fn complete(
                     // Since we don't have function_name stored in legacy format,
                     // use a generic name (this is the broken behavior we're fixing)
                     let function_name = "function".to_string();
-                    
+
                     contents.push(serde_json::json!({
                         "role": "user",
                         "parts": [{
@@ -121,6 +121,33 @@ pub(super) async fn complete(
                                 }
                             }
                         }]
+                    }));
+                } else if msg.has_images() {
+                    // Message with images (vision support)
+                    let mut parts = Vec::new();
+
+                    // Add images first
+                    if let Some(images) = &msg.images {
+                        for image in images {
+                            parts.push(serde_json::json!({
+                                "inlineData": {
+                                    "mimeType": image.media_type,
+                                    "data": image.data
+                                }
+                            }));
+                        }
+                    }
+
+                    // Add text content if present
+                    if !msg.content.is_empty() {
+                        parts.push(serde_json::json!({
+                            "text": msg.content.clone()
+                        }));
+                    }
+
+                    contents.push(serde_json::json!({
+                        "role": "user",
+                        "parts": parts
                     }));
                 } else {
                     // Regular user message
@@ -445,10 +472,11 @@ pub(super) async fn complete(
     let message = crate::message::Message {
         role: crate::message::Role::Assistant,
         content,
+        images: None,
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
         tool_results: None,
-            reasoning_items: None,
+        reasoning_items: None,
     };
     
     Ok(CompletionResponse {
@@ -494,7 +522,7 @@ pub(super) async fn stream(
                         // Use stored function_name, or fallback to generic
                         let function_name = result.function_name.clone()
                             .unwrap_or_else(|| "function".to_string());
-                        
+
                         parts.push(serde_json::json!({
                             "functionResponse": {
                                 "name": function_name,
@@ -512,7 +540,7 @@ pub(super) async fn stream(
                 // Legacy single tool result
                 else if let Some(_tool_call_id) = &msg.tool_call_id {
                     let function_name = "function".to_string();
-                    
+
                     contents.push(serde_json::json!({
                         "role": "user",
                         "parts": [{
@@ -524,6 +552,33 @@ pub(super) async fn stream(
                             }
                         }]
                     }));
+                } else if msg.has_images() {
+                    // Message with images (vision support)
+                    let mut parts = Vec::new();
+
+                    // Add images first
+                    if let Some(images) = &msg.images {
+                        for image in images {
+                            parts.push(serde_json::json!({
+                                "inlineData": {
+                                    "mimeType": image.media_type,
+                                    "data": image.data
+                                }
+                            }));
+                        }
+                    }
+
+                    // Add text content if present
+                    if !msg.content.is_empty() {
+                        parts.push(serde_json::json!({
+                            "text": msg.content.clone()
+                        }));
+                    }
+
+                    contents.push(serde_json::json!({
+                        "role": "user",
+                        "parts": parts
+                    }));
                 } else {
                     contents.push(serde_json::json!({
                         "role": "user",
@@ -534,13 +589,13 @@ pub(super) async fn stream(
             crate::message::Role::Assistant => {
                 if let Some(tool_uses) = &msg.tool_uses {
                     let mut parts = Vec::new();
-                    
+
                     if !msg.content.is_empty() {
                         parts.push(serde_json::json!({
                             "text": msg.content.clone()
                         }));
                     }
-                    
+
                     for tool_use in tool_uses {
                         // Add thoughtSignature for Gemini 3 compatibility
                         // Using dummy signature to skip validation when original not available
@@ -552,7 +607,7 @@ pub(super) async fn stream(
                             "thoughtSignature": "skip_thought_signature_validator"
                         }));
                     }
-                    
+
                     contents.push(serde_json::json!({
                         "role": "model",
                         "parts": parts

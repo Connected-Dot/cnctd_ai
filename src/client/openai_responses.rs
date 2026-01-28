@@ -35,7 +35,7 @@ fn convert_role(role: &crate::message::Role) -> ResponsesRole {
 /// Build input items from our messages
 fn build_input(request: &CompletionRequest) -> Input {
     let mut items: Vec<InputItem> = Vec::new();
-    
+
     for msg in &request.messages {
         match msg.role {
             crate::message::Role::System | crate::message::Role::User => {
@@ -65,8 +65,47 @@ fn build_input(request: &CompletionRequest) -> Input {
                     items.push(InputItem::Custom(output_item));
                     continue;
                 }
-                
-                // Regular message
+
+                // Check if message has images (vision support)
+                if msg.has_images() {
+                    // Build multipart content with images
+                    let mut content_parts = Vec::new();
+
+                    // Add text content if present
+                    if !msg.content.is_empty() {
+                        content_parts.push(serde_json::json!({
+                            "type": "input_text",
+                            "text": msg.content
+                        }));
+                    }
+
+                    // Add images as base64 data URLs
+                    if let Some(images) = &msg.images {
+                        for image in images {
+                            // OpenAI expects data URL format: data:{media_type};base64,{data}
+                            let data_url = format!("data:{};base64,{}", image.media_type, image.data);
+                            content_parts.push(serde_json::json!({
+                                "type": "input_image",
+                                "image_url": data_url
+                            }));
+                        }
+                    }
+
+                    // Use Custom InputItem for multipart messages
+                    let multipart_msg = serde_json::json!({
+                        "type": "message",
+                        "role": match msg.role {
+                            crate::message::Role::System => "system",
+                            crate::message::Role::User => "user",
+                            crate::message::Role::Assistant => "assistant",
+                        },
+                        "content": content_parts
+                    });
+                    items.push(InputItem::Custom(multipart_msg));
+                    continue;
+                }
+
+                // Regular text-only message
                 let input_msg = InputMessage {
                     kind: Default::default(),
                     role: convert_role(&msg.role),
@@ -245,10 +284,11 @@ pub(super) async fn complete(
     let message = crate::message::Message {
         role: crate::message::Role::Assistant,
         content,
+        images: None,
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
         tool_results: None,
-            reasoning_items: None,
+        reasoning_items: None,
     };
     
     let usage = if let Some(u) = &response.usage {

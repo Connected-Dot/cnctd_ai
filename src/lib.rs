@@ -13,7 +13,7 @@ pub mod embeddings;
 
 pub use client::{Client, ClientOptions, AnthropicConfig, OpenAiConfig, GeminiConfig};
 pub use error::{Error, Result};
-pub use message::{Message, Role, ToolResult};
+pub use message::{Message, Role, ToolResult, ImageContent, ContentPart};
 pub use request::{
     CompletionRequest, RequestOptions, BuiltInTool,
     LatLng, RetrievalConfig, ToolConfig,

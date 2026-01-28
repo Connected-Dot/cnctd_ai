@@ -850,6 +850,7 @@ impl CompletionStream {
             message: crate::message::Message {
                 role: crate::message::Role::Assistant,
                 content: self.accumulated_text.clone(),
+                images: None,
                 tool_uses: tool_uses_opt.clone(),
                 tool_call_id: None,
                 tool_results: None,

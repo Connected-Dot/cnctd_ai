@@ -151,10 +151,11 @@ pub(super) async fn complete(
     let message = crate::message::Message {
         role: crate::message::Role::Assistant,
         content: choice.message.content.clone().unwrap_or_default(),
+        images: None,
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
         tool_results: None,
-            reasoning_items: None,
+        reasoning_items: None,
     };
     
     let usage = if let Some(usage) = &response.usage {

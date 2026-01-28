@@ -23,7 +23,7 @@ pub(super) async fn complete(
         builder = builder.system(&system_msg.content);
     }
     
-    // Add user/assistant messages - handle tool results and tool uses
+    // Add user/assistant messages - handle tool results, tool uses, and images
     for msg in request.messages.iter().filter(|m| !matches!(m.role, crate::message::Role::System)) {
         match msg.role {
             crate::message::Role::User => {
@@ -37,6 +37,30 @@ pub(super) async fn complete(
                             is_error: Some(false),
                         }
                     ]));
+                } else if msg.has_images() {
+                    // Message with images - build content blocks
+                    let mut content_blocks = Vec::new();
+
+                    // Add images first (Anthropic prefers images before text)
+                    if let Some(images) = &msg.images {
+                        for image in images {
+                            content_blocks.push(ContentBlockParam::Image {
+                                source: anthropic_sdk::types::ImageSource::Base64 {
+                                    media_type: image.media_type.clone(),
+                                    data: image.data.clone(),
+                                },
+                            });
+                        }
+                    }
+
+                    // Add text content if present
+                    if !msg.content.is_empty() {
+                        content_blocks.push(ContentBlockParam::Text {
+                            text: msg.content.clone(),
+                        });
+                    }
+
+                    builder = builder.user(MessageContent::Blocks(content_blocks));
                 } else {
                     // Regular user message
                     builder = builder.user(MessageContent::Text(msg.content.clone()));
@@ -137,10 +161,11 @@ pub(super) async fn complete(
     let message = crate::message::Message {
         role: crate::message::Role::Assistant,
         content,
+        images: None,
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
-            tool_results: None,
-            reasoning_items: None,
+        tool_results: None,
+        reasoning_items: None,
     };
     
     let usage = crate::response::Usage {
@@ -205,7 +230,7 @@ pub(super) async fn stream(
         body["system"] = serde_json::json!(system_msg.content);
     }
 
-    // Add user/assistant messages - handle tool results and tool uses properly
+    // Add user/assistant messages - handle tool results, tool uses, and images properly
     let mut messages = Vec::new();
     for msg in request.messages.iter().filter(|m| !matches!(m.role, crate::message::Role::System)) {
         match msg.role {
@@ -236,6 +261,36 @@ pub(super) async fn stream(
                             "content": msg.content.clone(),
                             "is_error": false,
                         }]
+                    }));
+                } else if msg.has_images() {
+                    // Message with images - build content blocks
+                    let mut content_blocks = Vec::new();
+
+                    // Add images first (Anthropic prefers images before text)
+                    if let Some(images) = &msg.images {
+                        for image in images {
+                            content_blocks.push(serde_json::json!({
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": image.media_type,
+                                    "data": image.data
+                                }
+                            }));
+                        }
+                    }
+
+                    // Add text content if present
+                    if !msg.content.is_empty() {
+                        content_blocks.push(serde_json::json!({
+                            "type": "text",
+                            "text": msg.content.clone()
+                        }));
+                    }
+
+                    messages.push(serde_json::json!({
+                        "role": "user",
+                        "content": content_blocks
                     }));
                 } else {
                     // Regular user message
