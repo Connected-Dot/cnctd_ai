@@ -108,6 +108,46 @@ impl Client {
     }
 
     // =========================================================================
+    // Transcription API methods
+    // =========================================================================
+
+    /// Transcribe audio to text.
+    ///
+    /// Supported by OpenAI (Whisper) and Gemini providers.
+    /// Anthropic does not support audio transcription.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use cnctd_ai::{Client, TranscriptionRequest};
+    ///
+    /// let request = TranscriptionRequest::new("audio.mp3")
+    ///     .with_language("en")
+    ///     .with_timestamps();
+    ///
+    /// let response = client.transcribe(request).await?;
+    /// println!("Transcript: {}", response.text);
+    /// ```
+    pub async fn transcribe(
+        &self,
+        request: crate::transcription::TranscriptionRequest,
+    ) -> Result<crate::transcription::TranscriptionResponse> {
+        match &self.provider {
+            ProviderType::OpenAi { sdk_client, config } => {
+                crate::transcription::openai_transcribe(sdk_client, config, &request).await
+            }
+            ProviderType::Gemini { config } => {
+                crate::transcription::gemini_transcribe(config, &request).await
+            }
+            ProviderType::Anthropic { .. } => {
+                Err(Error::UnsupportedOperation(
+                    "Anthropic does not support audio transcription - use OpenAI or Gemini client".to_string()
+                ))
+            }
+        }
+    }
+
+    // =========================================================================
     // Embedding API methods
     // =========================================================================
 

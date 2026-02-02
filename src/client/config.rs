@@ -10,6 +10,9 @@ pub struct OpenAiConfig {
     pub api_key: String,
     pub model: String,
     pub organization: Option<String>,
+    /// Model to use for transcription (default: "whisper-1")
+    /// Options: "whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"
+    pub transcription_model: Option<String>,
 }
 
 #[derive(Clone, Debug)]

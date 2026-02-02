@@ -10,6 +10,7 @@ pub mod tool_helpers;
 pub mod agent;
 pub mod batch;
 pub mod embeddings;
+pub mod transcription;
 
 pub use client::{Client, ClientOptions, AnthropicConfig, OpenAiConfig, GeminiConfig};
 pub use error::{Error, Result};
@@ -70,6 +71,15 @@ pub use embeddings::{
     EmbeddingUsage,
     embed_small,
     embed_large,
+};
+
+// Re-export transcription types
+pub use transcription::{
+    TranscriptionRequest,
+    TranscriptionResponse,
+    TranscriptSegment,
+    AudioInput,
+    Speaker,
 };
 
 // Re-export Tool from rmcp (replaces custom Tool struct)

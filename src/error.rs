@@ -46,7 +46,16 @@ pub enum Error {
     
     #[error("Unsupported operation: {0}")]
     UnsupportedOperation(String),
-    
+
+    #[error("Audio file too large: {size_bytes} bytes (max: {max_bytes} bytes)")]
+    AudioTooLarge {
+        size_bytes: u64,
+        max_bytes: u64,
+    },
+
+    #[error("Unsupported audio format: {0}")]
+    UnsupportedAudioFormat(String),
+
     #[error("{0}")]
     Other(String),
 }
