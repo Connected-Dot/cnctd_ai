@@ -170,6 +170,126 @@ impl Client {
     }
 
     // =========================================================================
+    // Video Generation API methods
+    // =========================================================================
+
+    /// Start video generation from text prompt.
+    ///
+    /// This is an async operation - returns a job handle that must be polled.
+    ///
+    /// Supported by:
+    /// - **Gemini**: Veo 3.1 models (veo-3.1-generate-preview)
+    /// - **OpenAI**: Sora 2 models (sora-2, sora-2-pro)
+    /// - **Anthropic**: Not supported
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use cnctd_ai::{Client, VideoGenerationRequest};
+    ///
+    /// // Start video generation
+    /// let request = VideoGenerationRequest::new("A drone shot over a tropical beach at sunset")
+    ///     .medium()
+    ///     .landscape();
+    /// let mut job = client.generate_video(request).await?;
+    ///
+    /// // Poll until complete
+    /// loop {
+    ///     job = client.poll_video_status(&job).await?;
+    ///     if job.is_complete() { break; }
+    ///     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    /// }
+    ///
+    /// // Download the video
+    /// let response = client.download_video(&job).await?;
+    /// response.save("beach.mp4").await?;
+    /// ```
+    pub async fn generate_video(
+        &self,
+        request: crate::video_gen::VideoGenerationRequest,
+    ) -> Result<crate::video_gen::VideoGenerationJob> {
+        match &self.provider {
+            ProviderType::Gemini { config } => {
+                crate::video_gen::gemini_generate(config, &request).await
+            }
+            ProviderType::OpenAi { sdk_client, config } => {
+                crate::video_gen::openai_generate(sdk_client, config, &request).await
+            }
+            ProviderType::Anthropic { .. } => {
+                Err(Error::UnsupportedOperation(
+                    "Anthropic does not support video generation - use Gemini or OpenAI client".to_string()
+                ))
+            }
+        }
+    }
+
+    /// Poll video generation job status.
+    pub async fn poll_video_status(
+        &self,
+        job: &crate::video_gen::VideoGenerationJob,
+    ) -> Result<crate::video_gen::VideoGenerationJob> {
+        match &self.provider {
+            ProviderType::Gemini { .. } => {
+                crate::video_gen::gemini_poll(job).await
+            }
+            ProviderType::OpenAi { .. } => {
+                crate::video_gen::openai_poll(job).await
+            }
+            ProviderType::Anthropic { .. } => {
+                Err(Error::UnsupportedOperation(
+                    "Anthropic does not support video generation".to_string()
+                ))
+            }
+        }
+    }
+
+    /// Download completed video.
+    pub async fn download_video(
+        &self,
+        job: &crate::video_gen::VideoGenerationJob,
+    ) -> Result<crate::video_gen::VideoGenerationResponse> {
+        match &self.provider {
+            ProviderType::Gemini { .. } => {
+                crate::video_gen::gemini_download(job).await
+            }
+            ProviderType::OpenAi { .. } => {
+                crate::video_gen::openai_download(job).await
+            }
+            ProviderType::Anthropic { .. } => {
+                Err(Error::UnsupportedOperation(
+                    "Anthropic does not support video generation".to_string()
+                ))
+            }
+        }
+    }
+
+    /// Generate video and wait for completion (convenience method).
+    ///
+    /// Polls every 5 seconds until the video is ready, then downloads it.
+    pub async fn generate_video_blocking(
+        &self,
+        request: crate::video_gen::VideoGenerationRequest,
+    ) -> Result<crate::video_gen::VideoGenerationResponse> {
+        let mut job = self.generate_video(request).await?;
+
+        loop {
+            job = self.poll_video_status(&job).await?;
+
+            match &job.status {
+                crate::video_gen::VideoGenerationStatus::Completed => {
+                    return self.download_video(&job).await;
+                }
+                crate::video_gen::VideoGenerationStatus::Failed { error } => {
+                    return Err(Error::Other(format!("Video generation failed: {}", error)));
+                }
+                _ => {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+            }
+        }
+    }
+
+    // =========================================================================
     // Text-to-Speech API methods
     // =========================================================================
 

@@ -14,6 +14,7 @@ pub mod transcription;
 pub mod video;
 pub mod image_gen;
 pub mod tts;
+pub mod video_gen;
 
 pub use client::{Client, ClientOptions, AnthropicConfig, OpenAiConfig, GeminiConfig};
 pub use error::{Error, Result};
@@ -109,6 +110,18 @@ pub use tts::{
     SpeechResponse,
     Voice,
     AudioFormat,
+};
+
+// Re-export video generation types
+pub use video_gen::{
+    VideoGenerationRequest,
+    VideoGenerationResponse,
+    VideoGenerationJob,
+    VideoGenerationStatus,
+    VideoAspectRatio,
+    VideoResolution,
+    VideoDuration,
+    VideoInputImage,
 };
 
 // Re-export Tool from rmcp (replaces custom Tool struct)
