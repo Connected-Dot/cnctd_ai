@@ -37,6 +37,11 @@ impl Default for Voice {
 }
 
 impl Voice {
+    /// Get the voice name as a string (for OpenAI and realtime APIs)
+    pub fn as_str(&self) -> &str {
+        self.to_openai_string()
+    }
+
     /// Convert to OpenAI voice name
     pub fn to_openai_string(&self) -> &str {
         match self {

@@ -171,6 +171,8 @@ impl CompletionStream {
                                     prompt_tokens: usage.prompt_tokens,
                                     completion_tokens: usage.completion_tokens,
                                     total_tokens: usage.total_tokens,
+                                    cache_creation_tokens: None, // OpenAI doesn't expose cache tokens
+                                    cache_read_tokens: None,
                                 });
                                 has_usage_update = true;
                             }
@@ -461,6 +463,8 @@ impl CompletionStream {
                         prompt_tokens: usage.input_tokens,
                         completion_tokens: usage.output_tokens,
                         total_tokens: usage.total_tokens,
+                        cache_creation_tokens: None, // OpenAI doesn't expose cache tokens
+                        cache_read_tokens: None,
                     });
                 }
                 
@@ -570,14 +574,22 @@ impl CompletionStream {
 
         match event_type {
             "message_start" => {
-                // Extract initial usage info
+                // Extract initial usage info including cache usage
                 if let Some(usage) = data["message"]["usage"].as_object() {
                     let input_tokens = usage["input_tokens"].as_u64().unwrap_or(0) as u32;
                     let output_tokens = usage["output_tokens"].as_u64().unwrap_or(0) as u32;
+                    let cache_creation = usage.get("cache_creation_input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as u32);
+                    let cache_read = usage.get("cache_read_input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as u32);
                     self.usage = Some(crate::response::Usage {
                         prompt_tokens: input_tokens,
                         completion_tokens: output_tokens,
                         total_tokens: input_tokens + output_tokens,
+                        cache_creation_tokens: cache_creation,
+                        cache_read_tokens: cache_read,
                     });
                 }
                 Some(None) // Continue to next event
@@ -779,10 +791,16 @@ impl CompletionStream {
             let prompt_tokens = usage_metadata["promptTokenCount"].as_u64().unwrap_or(0) as u32;
             let completion_tokens = usage_metadata["candidatesTokenCount"].as_u64().unwrap_or(0) as u32;
             let total_tokens = usage_metadata["totalTokenCount"].as_u64().unwrap_or(0) as u32;
+            // Gemini has different caching mechanism (Context Caching API)
+            let cached_tokens = usage_metadata.get("cachedContentTokenCount")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
             self.usage = Some(crate::response::Usage {
                 prompt_tokens,
                 completion_tokens,
                 total_tokens,
+                cache_creation_tokens: None, // Gemini reports cached differently
+                cache_read_tokens: cached_tokens,
             });
         }
 
@@ -852,6 +870,8 @@ impl CompletionStream {
                 content: self.accumulated_text.clone(),
                 images: None,
                 videos: None,
+                documents: None,
+                cache_control: None,
                 tool_uses: tool_uses_opt.clone(),
                 tool_call_id: None,
                 tool_results: None,
@@ -861,6 +881,8 @@ impl CompletionStream {
                 prompt_tokens: 0,
                 completion_tokens: 0,
                 total_tokens: 0,
+                cache_creation_tokens: None,
+                cache_read_tokens: None,
             }),
             finish_reason: self.finish_reason.clone().unwrap_or(crate::response::FinishReason::Other),
             model: self.model.clone(),

@@ -163,16 +163,21 @@ pub(super) async fn complete(
         content,
         images: None,
         videos: None,
+        documents: None,
+        cache_control: None,
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
         tool_results: None,
         reasoning_items: None,
     };
-    
+
     let usage = crate::response::Usage {
         prompt_tokens: anthropic_response.usage.input_tokens,
         completion_tokens: anthropic_response.usage.output_tokens,
         total_tokens: anthropic_response.usage.input_tokens + anthropic_response.usage.output_tokens,
+        // Note: Cache usage not available through the SDK - use streaming for full cache support
+        cache_creation_tokens: None,
+        cache_read_tokens: None,
     };
     
     let finish_reason = match anthropic_response.stop_reason {
@@ -226,9 +231,18 @@ pub(super) async fn stream(
         "stream": true,
     });
 
-    // Add system message if present
+    // Add system message if present (with cache control support)
     if let Some(system_msg) = request.messages.iter().find(|m| matches!(m.role, crate::message::Role::System)) {
-        body["system"] = serde_json::json!(system_msg.content);
+        // If cache control is set, use content block format
+        if system_msg.cache_control.is_some() {
+            body["system"] = serde_json::json!([{
+                "type": "text",
+                "text": system_msg.content,
+                "cache_control": { "type": "ephemeral" }
+            }]);
+        } else {
+            body["system"] = serde_json::json!(system_msg.content);
+        }
     }
 
     // Add user/assistant messages - handle tool results, tool uses, and images properly
@@ -263,11 +277,30 @@ pub(super) async fn stream(
                             "is_error": false,
                         }]
                     }));
-                } else if msg.has_images() {
-                    // Message with images - build content blocks
+                } else if msg.has_images() || msg.has_documents() {
+                    // Message with images/documents - build content blocks
                     let mut content_blocks = Vec::new();
 
-                    // Add images first (Anthropic prefers images before text)
+                    // Add documents first (Anthropic prefers documents before text)
+                    if let Some(documents) = &msg.documents {
+                        for doc in documents {
+                            let mut doc_block = serde_json::json!({
+                                "type": "document",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": doc.media_type,
+                                    "data": doc.data
+                                }
+                            });
+                            // Add cache_control if message has it set
+                            if msg.cache_control.is_some() {
+                                doc_block["cache_control"] = serde_json::json!({ "type": "ephemeral" });
+                            }
+                            content_blocks.push(doc_block);
+                        }
+                    }
+
+                    // Add images (Anthropic prefers images before text)
                     if let Some(images) = &msg.images {
                         for image in images {
                             content_blocks.push(serde_json::json!({
@@ -283,15 +316,30 @@ pub(super) async fn stream(
 
                     // Add text content if present
                     if !msg.content.is_empty() {
-                        content_blocks.push(serde_json::json!({
+                        let mut text_block = serde_json::json!({
                             "type": "text",
                             "text": msg.content.clone()
-                        }));
+                        });
+                        // Add cache_control to the last content block if set
+                        if msg.cache_control.is_some() && msg.documents.is_none() {
+                            text_block["cache_control"] = serde_json::json!({ "type": "ephemeral" });
+                        }
+                        content_blocks.push(text_block);
                     }
 
                     messages.push(serde_json::json!({
                         "role": "user",
                         "content": content_blocks
+                    }));
+                } else if msg.cache_control.is_some() {
+                    // Regular user message with cache control
+                    messages.push(serde_json::json!({
+                        "role": "user",
+                        "content": [{
+                            "type": "text",
+                            "text": msg.content.clone(),
+                            "cache_control": { "type": "ephemeral" }
+                        }]
                     }));
                 } else {
                     // Regular user message
@@ -376,6 +424,11 @@ pub(super) async fn stream(
     headers.insert(
         "anthropic-version",
         HeaderValue::from_static("2023-06-01")
+    );
+    // Enable prompt caching beta feature
+    headers.insert(
+        "anthropic-beta",
+        HeaderValue::from_static("prompt-caching-2024-07-31")
     );
     
     // Make the HTTP request

@@ -65,6 +65,9 @@ pub(super) async fn complete(
     });
     
     // Add system instruction if present
+    // Note: Gemini uses implicit caching (automatic) since May 2025
+    // The with_cache() flag is a no-op for Gemini - caching happens automatically
+    // and savings are reflected in cachedContentTokenCount in the response
     if let Some(system_msg) = request.messages.iter().find(|m| matches!(m.role, crate::message::Role::System)) {
         body["systemInstruction"] = serde_json::json!({
             "parts": [{ "text": system_msg.content.clone() }]
@@ -122,11 +125,23 @@ pub(super) async fn complete(
                             }
                         }]
                     }));
-                } else if msg.has_images() || msg.has_videos() {
-                    // Message with images/videos (vision support)
+                } else if msg.has_images() || msg.has_videos() || msg.has_documents() {
+                    // Message with images/videos/documents (multimodal support)
                     let mut parts = Vec::new();
 
-                    // Add images first
+                    // Add documents first (PDFs, etc.)
+                    if let Some(documents) = &msg.documents {
+                        for doc in documents {
+                            parts.push(serde_json::json!({
+                                "inlineData": {
+                                    "mimeType": doc.media_type,
+                                    "data": doc.data
+                                }
+                            }));
+                        }
+                    }
+
+                    // Add images
                     if let Some(images) = &msg.images {
                         for image in images {
                             parts.push(serde_json::json!({
@@ -163,6 +178,7 @@ pub(super) async fn complete(
                     }));
                 } else {
                     // Regular user message
+                    // Note: with_cache() is a no-op for Gemini - implicit caching is automatic
                     contents.push(serde_json::json!({
                         "role": "user",
                         "parts": [{ "text": msg.content.clone() }]
@@ -455,19 +471,26 @@ pub(super) async fn complete(
         }
     };
     
-    // Extract usage
+    // Extract usage including cached tokens if present
     let usage_metadata = response_json.get("usageMetadata");
     let usage = if let Some(usage_data) = usage_metadata {
+        let cached_tokens = usage_data.get("cachedContentTokenCount")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
         crate::response::Usage {
             prompt_tokens: usage_data["promptTokenCount"].as_u64().unwrap_or(0) as u32,
             completion_tokens: usage_data["candidatesTokenCount"].as_u64().unwrap_or(0) as u32,
             total_tokens: usage_data["totalTokenCount"].as_u64().unwrap_or(0) as u32,
+            cache_creation_tokens: None, // Gemini Context Caching uses different mechanism
+            cache_read_tokens: cached_tokens,
         }
     } else {
         crate::response::Usage {
             prompt_tokens: 0,
             completion_tokens: 0,
             total_tokens: 0,
+            cache_creation_tokens: None,
+            cache_read_tokens: None,
         }
     };
     
@@ -486,6 +509,8 @@ pub(super) async fn complete(
         content,
         images: None,
         videos: None,
+        documents: None,
+        cache_control: None,
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
         tool_results: None,
@@ -517,6 +542,9 @@ pub(super) async fn stream(
     });
     
     // Add system instruction if present
+    // Note: Gemini uses implicit caching (automatic) since May 2025
+    // The with_cache() flag is a no-op for Gemini - caching happens automatically
+    // and savings are reflected in cachedContentTokenCount in the response
     if let Some(system_msg) = request.messages.iter().find(|m| matches!(m.role, crate::message::Role::System)) {
         body["systemInstruction"] = serde_json::json!({
             "parts": [{ "text": system_msg.content.clone() }]
@@ -565,11 +593,23 @@ pub(super) async fn stream(
                             }
                         }]
                     }));
-                } else if msg.has_images() || msg.has_videos() {
-                    // Message with images/videos (vision support)
+                } else if msg.has_images() || msg.has_videos() || msg.has_documents() {
+                    // Message with images/videos/documents (multimodal support)
                     let mut parts = Vec::new();
 
-                    // Add images first
+                    // Add documents first (PDFs, etc.)
+                    if let Some(documents) = &msg.documents {
+                        for doc in documents {
+                            parts.push(serde_json::json!({
+                                "inlineData": {
+                                    "mimeType": doc.media_type,
+                                    "data": doc.data
+                                }
+                            }));
+                        }
+                    }
+
+                    // Add images
                     if let Some(images) = &msg.images {
                         for image in images {
                             parts.push(serde_json::json!({
@@ -605,6 +645,7 @@ pub(super) async fn stream(
                         "parts": parts
                     }));
                 } else {
+                    // Note: with_cache() is a no-op for Gemini - implicit caching is automatic
                     contents.push(serde_json::json!({
                         "role": "user",
                         "parts": [{ "text": msg.content.clone() }]

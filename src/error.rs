@@ -56,6 +56,15 @@ pub enum Error {
     #[error("Unsupported audio format: {0}")]
     UnsupportedAudioFormat(String),
 
+    #[error("IO error: {0}")]
+    IoError(String),
+
+    #[error("WebSocket error: {0}")]
+    WebSocketError(String),
+
+    #[error("Realtime session closed")]
+    RealtimeSessionClosed,
+
     #[error("{0}")]
     Other(String),
 }

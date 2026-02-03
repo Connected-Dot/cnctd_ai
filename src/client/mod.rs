@@ -650,6 +650,78 @@ impl Client {
             }
         }
     }
+
+    // =========================================================================
+    // Real-time Audio API methods
+    // =========================================================================
+
+    /// Connect to a real-time audio session for bidirectional audio streaming.
+    ///
+    /// This establishes a WebSocket connection for live audio conversations.
+    ///
+    /// Supported by:
+    /// - **OpenAI**: Realtime API (gpt-4o-realtime-preview)
+    /// - **Anthropic**: Not supported
+    /// - **Gemini**: Not supported (yet)
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use cnctd_ai::{Client, OpenAiConfig};
+    /// use cnctd_ai::realtime::{RealtimeConfig, RealtimeEvent, Modality};
+    /// use cnctd_ai::tts::Voice;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let client = Client::openai(OpenAiConfig {
+    ///         api_key: std::env::var("OPENAI_API_KEY")?,
+    ///         model: "gpt-4o".to_string(),
+    ///         ..Default::default()
+    ///     }, None)?;
+    ///
+    ///     let config = RealtimeConfig::default()
+    ///         .with_voice(Voice::Nova)
+    ///         .with_instructions("You are a helpful voice assistant.");
+    ///
+    ///     let mut session = client.connect_realtime(config).await?;
+    ///
+    ///     // Send text and get audio response
+    ///     session.send_text("Hello! How are you?").await?;
+    ///
+    ///     while let Some(event) = session.next_event().await {
+    ///         match event {
+    ///             RealtimeEvent::AudioDelta { delta } => {
+    ///                 // Play audio bytes...
+    ///             }
+    ///             RealtimeEvent::ResponseDone => break,
+    ///             _ => {}
+    ///         }
+    ///     }
+    ///
+    ///     session.close().await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn connect_realtime(
+        &self,
+        config: crate::realtime::RealtimeConfig,
+    ) -> Result<crate::realtime::RealtimeSession> {
+        match &self.provider {
+            ProviderType::OpenAi { config: openai_config, .. } => {
+                crate::realtime::openai::connect(openai_config, config).await
+            }
+            ProviderType::Anthropic { .. } => {
+                Err(Error::UnsupportedOperation(
+                    "Anthropic does not support real-time audio - use OpenAI client".to_string()
+                ))
+            }
+            ProviderType::Gemini { .. } => {
+                Err(Error::UnsupportedOperation(
+                    "Gemini real-time audio is not yet supported - use OpenAI client".to_string()
+                ))
+            }
+        }
+    }
 }
 
 #[derive(Clone)]

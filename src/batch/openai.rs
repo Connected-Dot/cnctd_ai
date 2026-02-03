@@ -330,6 +330,8 @@ fn parse_completion_from_body(body: &serde_json::Value) -> Result<crate::respons
         prompt_tokens,
         completion_tokens,
         total_tokens: prompt_tokens + completion_tokens,
+        cache_creation_tokens: None,
+        cache_read_tokens: None,
     };
 
     // Parse tool calls if present
@@ -367,6 +369,8 @@ fn parse_completion_from_body(body: &serde_json::Value) -> Result<crate::respons
             content,
             images: None,
             videos: None,
+            documents: None,
+            cache_control: None,
             tool_uses: tool_uses_opt.clone(),
             tool_call_id: None,
             tool_results: None,

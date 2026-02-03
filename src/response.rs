@@ -73,6 +73,25 @@ pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
+    /// Tokens written to cache (Anthropic prompt caching)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_creation_tokens: Option<u32>,
+    /// Tokens read from cache (Anthropic prompt caching)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u32>,
+}
+
+impl Usage {
+    /// Check if any caching was used in this request
+    pub fn used_cache(&self) -> bool {
+        self.cache_creation_tokens.is_some() || self.cache_read_tokens.is_some()
+    }
+
+    /// Get the effective prompt tokens (non-cached portion)
+    /// Returns prompt_tokens minus cache_read_tokens if available
+    pub fn effective_prompt_tokens(&self) -> u32 {
+        self.prompt_tokens.saturating_sub(self.cache_read_tokens.unwrap_or(0))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

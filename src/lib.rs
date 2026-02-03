@@ -15,10 +15,11 @@ pub mod video;
 pub mod image_gen;
 pub mod tts;
 pub mod video_gen;
+pub mod realtime;
 
 pub use client::{Client, ClientOptions, AnthropicConfig, OpenAiConfig, GeminiConfig};
 pub use error::{Error, Result};
-pub use message::{Message, Role, ToolResult, ImageContent, ContentPart};
+pub use message::{Message, Role, ToolResult, ImageContent, ContentPart, DocumentContent, CacheControl};
 pub use request::{
     CompletionRequest, RequestOptions, BuiltInTool,
     LatLng, RetrievalConfig, ToolConfig,

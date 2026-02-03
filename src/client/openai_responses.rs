@@ -286,20 +286,30 @@ pub(super) async fn complete(
         content,
         images: None,
         videos: None,
+        documents: None,
+        cache_control: None,
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
         tool_results: None,
         reasoning_items: None,
     };
-    
+
     let usage = if let Some(u) = &response.usage {
         crate::response::Usage {
             prompt_tokens: u.input_tokens,
             completion_tokens: u.output_tokens,
             total_tokens: u.total_tokens,
+            cache_creation_tokens: None, // OpenAI caching is automatic
+            cache_read_tokens: None,
         }
     } else {
-        crate::response::Usage { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+        crate::response::Usage {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            cache_creation_tokens: None,
+            cache_read_tokens: None,
+        }
     };
     
     let finish_reason = match response.status {

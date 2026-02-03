@@ -5,7 +5,7 @@ pub struct AnthropicConfig {
     pub version: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct OpenAiConfig {
     pub api_key: String,
     pub model: String,

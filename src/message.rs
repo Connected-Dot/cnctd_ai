@@ -1,7 +1,17 @@
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 use crate::ToolUse;
 use crate::video::VideoContent;
+
+/// Cache control for prompt caching (Anthropic)
+/// Marks content blocks as candidates for caching to reduce costs
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CacheControl {
+    /// Ephemeral cache - content may be cached for the duration of the session
+    Ephemeral,
+}
 
 /// Image content for vision-capable models
 /// Supports base64-encoded image data
@@ -43,7 +53,106 @@ impl ImageContent {
     }
 }
 
-/// A part of message content - can be text, image, or video
+/// Document content for document-capable models (Anthropic, Gemini)
+/// Supports base64-encoded documents like PDFs
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DocumentContent {
+    /// Base64-encoded document data
+    pub data: String,
+    /// MIME type (application/pdf, text/plain, etc.)
+    pub media_type: String,
+    /// Optional filename for display purposes
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+}
+
+impl DocumentContent {
+    /// Create new document content from base64 data and MIME type
+    pub fn new(data: impl Into<String>, media_type: impl Into<String>) -> Self {
+        Self {
+            data: data.into(),
+            media_type: media_type.into(),
+            filename: None,
+        }
+    }
+
+    /// Create from PDF base64 data
+    pub fn pdf(data: impl Into<String>) -> Self {
+        Self::new(data, "application/pdf")
+    }
+
+    /// Create from plain text base64 data
+    pub fn text(data: impl Into<String>) -> Self {
+        Self::new(data, "text/plain")
+    }
+
+    /// Create from HTML base64 data
+    pub fn html(data: impl Into<String>) -> Self {
+        Self::new(data, "text/html")
+    }
+
+    /// Create from Markdown base64 data
+    pub fn markdown(data: impl Into<String>) -> Self {
+        Self::new(data, "text/markdown")
+    }
+
+    /// Create from CSV base64 data
+    pub fn csv(data: impl Into<String>) -> Self {
+        Self::new(data, "text/csv")
+    }
+
+    /// Create from DOCX base64 data
+    pub fn docx(data: impl Into<String>) -> Self {
+        Self::new(data, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    }
+
+    /// Create from XLSX base64 data
+    pub fn xlsx(data: impl Into<String>) -> Self {
+        Self::new(data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    }
+
+    /// Set the filename for this document
+    pub fn with_filename(mut self, filename: impl Into<String>) -> Self {
+        self.filename = Some(filename.into());
+        self
+    }
+
+    /// Load document from file and base64 encode it
+    pub async fn from_file(path: impl AsRef<Path>) -> crate::Result<Self> {
+        let path = path.as_ref();
+        let data = tokio::fs::read(path).await
+            .map_err(|e| crate::Error::IoError(e.to_string()))?;
+        let base64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+
+        let media_type = Self::mime_type_from_extension(path);
+        let filename = path.file_name()
+            .map(|n| n.to_string_lossy().to_string());
+
+        Ok(Self {
+            data: base64_data,
+            media_type,
+            filename,
+        })
+    }
+
+    /// Guess MIME type from file extension
+    fn mime_type_from_extension(path: &Path) -> String {
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("pdf") => "application/pdf",
+            Some("txt") => "text/plain",
+            Some("html") | Some("htm") => "text/html",
+            Some("md") | Some("markdown") => "text/markdown",
+            Some("csv") => "text/csv",
+            Some("docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            Some("xlsx") => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            Some("json") => "application/json",
+            Some("xml") => "application/xml",
+            _ => "application/octet-stream",
+        }.to_string()
+    }
+}
+
+/// A part of message content - can be text, image, video, or document
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
@@ -53,6 +162,8 @@ pub enum ContentPart {
     Image(ImageContent),
     /// Video content (base64 encoded)
     Video(VideoContent),
+    /// Document content (base64 encoded)
+    Document(DocumentContent),
 }
 
 /// Represents a single tool result (tool_call_id + content)
@@ -151,6 +262,13 @@ pub struct Message {
     /// Videos attached to this message (for vision-capable models)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub videos: Option<Vec<VideoContent>>,
+    /// Documents attached to this message (for document-capable models)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documents: Option<Vec<DocumentContent>>,
+    /// Cache control for prompt caching (Anthropic)
+    /// When set, marks this message's content as a caching candidate
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
     // Internal fields for tool tracking
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tool_uses: Option<Vec<ToolUse>>,
@@ -172,6 +290,8 @@ impl Message {
             content: content.into(),
             images: None,
             videos: None,
+            documents: None,
+            cache_control: None,
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
@@ -187,6 +307,8 @@ impl Message {
             content: content.into(),
             images: Some(vec![image]),
             videos: None,
+            documents: None,
+            cache_control: None,
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
@@ -205,6 +327,8 @@ impl Message {
                 Some(images)
             },
             videos: None,
+            documents: None,
+            cache_control: None,
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
@@ -219,6 +343,8 @@ impl Message {
             content: content.into(),
             images: None,
             videos: Some(vec![video]),
+            documents: None,
+            cache_control: None,
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
@@ -237,6 +363,8 @@ impl Message {
             } else {
                 Some(videos)
             },
+            documents: None,
+            cache_control: None,
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
@@ -244,18 +372,56 @@ impl Message {
         }
     }
 
-    /// Create a user message with multipart content (text, images, and videos in any order)
+    /// Create a user message with a single document
+    pub fn user_with_document(content: impl Into<String>, document: DocumentContent) -> Self {
+        Self {
+            role: Role::User,
+            content: content.into(),
+            images: None,
+            videos: None,
+            documents: Some(vec![document]),
+            cache_control: None,
+            tool_uses: None,
+            tool_call_id: None,
+            tool_results: None,
+            reasoning_items: None,
+        }
+    }
+
+    /// Create a user message with multiple documents
+    pub fn user_with_documents(content: impl Into<String>, documents: Vec<DocumentContent>) -> Self {
+        Self {
+            role: Role::User,
+            content: content.into(),
+            images: None,
+            videos: None,
+            documents: if documents.is_empty() {
+                None
+            } else {
+                Some(documents)
+            },
+            cache_control: None,
+            tool_uses: None,
+            tool_call_id: None,
+            tool_results: None,
+            reasoning_items: None,
+        }
+    }
+
+    /// Create a user message with multipart content (text, images, videos, and documents in any order)
     /// Use this when you need fine control over content ordering
     pub fn user_multipart(parts: Vec<ContentPart>) -> Self {
         let mut text_parts = Vec::new();
         let mut images = Vec::new();
         let mut videos = Vec::new();
+        let mut documents = Vec::new();
 
         for part in parts {
             match part {
                 ContentPart::Text { text } => text_parts.push(text),
                 ContentPart::Image(img) => images.push(img),
                 ContentPart::Video(vid) => videos.push(vid),
+                ContentPart::Document(doc) => documents.push(doc),
             }
         }
 
@@ -272,6 +438,12 @@ impl Message {
             } else {
                 Some(videos)
             },
+            documents: if documents.is_empty() {
+                None
+            } else {
+                Some(documents)
+            },
+            cache_control: None,
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
@@ -285,6 +457,8 @@ impl Message {
             content: content.into(),
             images: None,
             videos: None,
+            documents: None,
+            cache_control: None,
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
@@ -298,6 +472,8 @@ impl Message {
             content: content.into(),
             images: None,
             videos: None,
+            documents: None,
+            cache_control: None,
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
@@ -312,6 +488,8 @@ impl Message {
             content: String::new(),
             images: None,
             videos: None,
+            documents: None,
+            cache_control: None,
             tool_uses: Some(vec![tool_use]),
             tool_call_id: None,
             tool_results: None,
@@ -326,6 +504,8 @@ impl Message {
             content: String::new(),
             images: None,
             videos: None,
+            documents: None,
+            cache_control: None,
             tool_uses: if tool_uses.is_empty() {
                 None
             } else {
@@ -347,6 +527,8 @@ impl Message {
             content: content.into(),
             images: None,
             videos: None,
+            documents: None,
+            cache_control: None,
             tool_uses: if tool_uses.is_empty() {
                 None
             } else {
@@ -365,6 +547,8 @@ impl Message {
             content: content.into(),
             images: None,
             videos: None,
+            documents: None,
+            cache_control: None,
             tool_uses: None,
             tool_call_id: Some(tool_call_id),
             tool_results: None,
@@ -380,6 +564,8 @@ impl Message {
             content: String::new(),
             images: None,
             videos: None,
+            documents: None,
+            cache_control: None,
             tool_uses: None,
             tool_call_id: None,
             tool_results: if results.is_empty() {
@@ -399,6 +585,11 @@ impl Message {
     /// Check if this message has videos attached
     pub fn has_videos(&self) -> bool {
         self.videos.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+    }
+
+    /// Check if this message has documents attached
+    pub fn has_documents(&self) -> bool {
+        self.documents.as_ref().map(|d| !d.is_empty()).unwrap_or(false)
     }
 
     /// Check if this message contains tool results
@@ -427,6 +618,13 @@ impl Message {
     /// Required for multi-turn tool calls with reasoning models
     pub fn with_reasoning_items(mut self, items: Vec<serde_json::Value>) -> Self {
         self.reasoning_items = Some(items);
+        self
+    }
+
+    /// Enable prompt caching for this message (Anthropic)
+    /// Marks the content as a candidate for caching to reduce costs
+    pub fn with_cache(mut self) -> Self {
+        self.cache_control = Some(CacheControl::Ephemeral);
         self
     }
 }
