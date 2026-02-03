@@ -388,6 +388,8 @@ fn parse_completion_from_body(body: &serde_json::Value) -> Result<crate::respons
         code_execution_results: None,
         google_maps_widget_token: None,
         reasoning_items: None,
+        reasoning_summary: None,
+        citations: None,
     })
 }
 

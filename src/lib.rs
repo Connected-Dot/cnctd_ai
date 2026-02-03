@@ -23,12 +23,15 @@ pub use message::{Message, Role, ToolResult, ImageContent, ContentPart, Document
 pub use request::{
     CompletionRequest, RequestOptions, BuiltInTool,
     LatLng, RetrievalConfig, ToolConfig,
+    ThinkingLevel, MediaResolution, CitationConfig,
+    McpServerConfig, McpApprovalMode,
 };
 pub use tool::ToolUse;
 pub use response::{
     CompletionResponse, Usage, FinishReason,
     GroundingMetadata, GroundingChunk, GroundingSupport, WebChunk, SearchEntryPoint,
     CodeExecutionResult, CodeExecutionOutcome,
+    Citation,
 };
 pub use stream::{CompletionStream, StreamChunk};
 pub use tool_helpers::{create_tool, create_tool_borrowed};

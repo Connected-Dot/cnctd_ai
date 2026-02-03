@@ -9,8 +9,11 @@ use crate::video::VideoContent;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CacheControl {
-    /// Ephemeral cache - content may be cached for the duration of the session
+    /// Ephemeral cache - 5 minute TTL, 1.25x write cost, 0.1x read cost
     Ephemeral,
+    /// Extended cache - 1 hour TTL, 2x write cost, 0.1x read cost
+    /// Useful when you expect to reuse prompts over longer sessions
+    Extended,
 }
 
 /// Image content for vision-capable models
@@ -622,9 +625,17 @@ impl Message {
     }
 
     /// Enable prompt caching for this message (Anthropic)
-    /// Marks the content as a candidate for caching to reduce costs
+    /// Marks the content as a candidate for 5-minute caching (1.25x write, 0.1x read)
     pub fn with_cache(mut self) -> Self {
         self.cache_control = Some(CacheControl::Ephemeral);
+        self
+    }
+
+    /// Enable extended prompt caching for this message (Anthropic)
+    /// Marks the content as a candidate for 1-hour caching (2x write, 0.1x read)
+    /// Useful when you expect to reuse prompts over longer sessions
+    pub fn with_extended_cache(mut self) -> Self {
+        self.cache_control = Some(CacheControl::Extended);
         self
     }
 }

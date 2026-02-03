@@ -158,10 +158,6 @@ impl CompletionStream {
                 StreamType::OpenAi(stream) => {
                     match stream.next().await {
                         Some(Ok(response)) => {
-                            eprintln!("DEBUG OpenAI stream chunk: choices={}, usage={:?}", 
-                                response.choices.len(),
-                                response.usage.as_ref().map(|u| (u.prompt_tokens, u.completion_tokens))
-                            );
                             let mut has_usage_update = false;
                             
                             // Update usage if present (check this first, before choices)
@@ -178,11 +174,6 @@ impl CompletionStream {
                             }
                             
                             if let Some(choice) = response.choices.get(0) {
-                                eprintln!("DEBUG OpenAI choice: content={:?}, tool_calls={:?}, finish={:?}",
-                                    choice.delta.content.as_ref().map(|s| s.chars().take(50).collect::<String>()),
-                                    choice.delta.tool_calls.as_ref().map(|tc| tc.len()),
-                                    choice.finish_reason
-                                );
                                 // Handle tool calls
                                 if let Some(tool_calls) = &choice.delta.tool_calls {
                                     for tool_call in tool_calls {
@@ -249,16 +240,11 @@ impl CompletionStream {
                 StreamType::OpenAiResponses(stream) => {
                     // If we've already completed, don't poll again
                     if self.finish_reason.is_some() {
-                        eprintln!("DEBUG: Responses stream already completed, returning None");
                         return None;
                     }
-                    
-                    eprintln!("DEBUG: About to poll OpenAI Responses stream...");
-                    let poll_result = stream.next().await;
-                    eprintln!("DEBUG: Poll result is_some={}", poll_result.is_some());
-                    match poll_result {
+
+                    match stream.next().await {
                         Some(Ok(event)) => {
-                            eprintln!("DEBUG: Got event from Responses stream");
                             if let Some(chunk) = self.handle_openai_responses_event(event) {
                                 return Some(Ok(chunk));
                             }
@@ -268,16 +254,13 @@ impl CompletionStream {
                             let err_str = e.to_string();
                             // "Stream ended" is normal termination, not an error
                             if err_str.contains("Stream ended") {
-                                eprintln!("DEBUG: Responses stream ended normally");
                                 return None;
                             }
-                            eprintln!("DEBUG: Responses stream error: {}", e);
                             return Some(Err(crate::error::Error::Other(
                                 format!("Responses API stream error: {}", e)
                             )));
                         }
                         None => {
-                            eprintln!("DEBUG: Responses stream ended (None)");
                             return None;
                         }
                     }
@@ -308,26 +291,17 @@ impl CompletionStream {
         use async_openai::types::responses::ResponseEvent;
         
         match event {
-            ResponseEvent::ResponseCreated(e) => {
-                eprintln!("DEBUG Responses: Created, id={}", e.response.id);
-                None
-            }
-            ResponseEvent::ResponseInProgress(_) => {
-                eprintln!("DEBUG Responses: In progress");
-                None
-            }
+            ResponseEvent::ResponseCreated(_) => None,
+            ResponseEvent::ResponseInProgress(_) => None,
             ResponseEvent::ResponseOutputItemAdded(e) => {
-                eprintln!("DEBUG Responses: Output item added, index={}", e.output_index);
                 // Capture function name for later use in Unknown event parsing
                 if let async_openai::types::responses::OutputItem::FunctionCall(fc) = &e.item {
-                    eprintln!("DEBUG Responses: OutputItemAdded FunctionCall id={}, call_id={}, name={}", fc.id, fc.call_id, fc.name);
                     self.pending_function_names.insert(fc.id.clone(), fc.name.clone());
                     self.pending_call_ids.insert(fc.id.clone(), fc.call_id.clone());
                 }
                 None
             }
             ResponseEvent::ResponseOutputTextDelta(e) => {
-                eprintln!("DEBUG Responses: Text delta len={}", e.delta.len());
                 self.accumulated_text.push_str(&e.delta);
                 Some(StreamChunk {
                     delta: Some(e.delta),
@@ -335,10 +309,8 @@ impl CompletionStream {
                 })
             }
             ResponseEvent::ResponseOutputTextDone(e) => {
-                eprintln!("DEBUG Responses: Text done, total len={}, accumulated={}", e.text.len(), self.accumulated_text.len());
                 // If we haven't accumulated any text via deltas, use the full text from done event
                 if self.accumulated_text.is_empty() && !e.text.is_empty() {
-                    eprintln!("DEBUG Responses: Using text from OutputTextDone since accumulated was empty");
                     self.accumulated_text.push_str(&e.text);
                     return Some(StreamChunk {
                         delta: Some(e.text),
@@ -349,10 +321,8 @@ impl CompletionStream {
             }
             // Handle ContentPartAdded - may contain initial text for some models
             ResponseEvent::ResponseContentPartAdded(e) => {
-                eprintln!("DEBUG Responses: Content part added, type={}", e.part.part_type);
                 if let Some(text) = &e.part.text {
                     if !text.is_empty() {
-                        eprintln!("DEBUG Responses: ContentPartAdded has text len={}", text.len());
                         self.accumulated_text.push_str(text);
                         return Some(StreamChunk {
                             delta: Some(text.clone()),
@@ -364,38 +334,31 @@ impl CompletionStream {
             }
             // Handle ContentPartDone - contains complete text for some models (like GPT-5.2)
             ResponseEvent::ResponseContentPartDone(e) => {
-                eprintln!("DEBUG Responses: Content part done, type={}", e.part.part_type);
                 if let Some(text) = &e.part.text {
                     // Only add if we haven't already accumulated this text
                     // (some models send both delta and done events)
                     if !text.is_empty() && self.accumulated_text.is_empty() {
-                        eprintln!("DEBUG Responses: ContentPartDone has text len={}, accumulated was empty", text.len());
                         self.accumulated_text.push_str(text);
                         return Some(StreamChunk {
                             delta: Some(text.clone()),
                             finish_reason: None,
                         });
-                    } else if !text.is_empty() {
-                        eprintln!("DEBUG Responses: ContentPartDone has text but accumulated already has {} chars", self.accumulated_text.len());
                     }
                 }
                 None
             }
             ResponseEvent::ResponseFunctionCallArgumentsDelta(e) => {
-                eprintln!("DEBUG Responses: Function args delta, item_id={}", e.item_id);
                 // Accumulate function call arguments
                 let entry = self.accumulated_function_args.entry(e.item_id).or_default();
                 entry.push_str(&e.delta);
                 None
             }
             ResponseEvent::ResponseFunctionCallArgumentsDone(e) => {
-                eprintln!("DEBUG Responses: Function call done, name={}, args={}", e.name, e.arguments);
                 // Create tool use from accumulated arguments
                 let args_value: serde_json::Value = serde_json::from_str(&e.arguments)
                     .unwrap_or_else(|_| serde_json::Value::String(e.arguments.clone()));
                 // Get the call_id from OutputItemAdded (required for function_call_output)
                 let call_id = self.pending_call_ids.get(&e.item_id).cloned();
-                eprintln!("DEBUG Responses: Creating ToolUse: id={}, call_id={:?}", e.item_id, call_id);
                 self.tool_uses.push(crate::tool::ToolUse {
                     id: e.item_id.clone(),
                     call_id,
@@ -405,13 +368,9 @@ impl CompletionStream {
                 None
             }
             ResponseEvent::ResponseOutputItemDone(e) => {
-                eprintln!("DEBUG Responses: Output item done, index={}", e.output_index);
-                
                 // Capture reasoning items for continuation requests (GPT-5.2-pro requirement)
                 // Must include encrypted_content for multi-turn stateless conversations
                 if let async_openai::types::responses::OutputItem::Reasoning(ref reasoning) = e.item {
-                    eprintln!("DEBUG Responses: Captured reasoning item id={}, has_encrypted_content={}",
-                        reasoning.id, reasoning.encrypted_content.is_some());
                     // Store as JSON for echoing back in continuation
                     // Include encrypted_content if present (required for multi-turn tool calls)
                     let mut reasoning_json = serde_json::json!({
@@ -430,12 +389,11 @@ impl CompletionStream {
                     }
                     self.reasoning_items.push(reasoning_json);
                 }
-                
+
                 // Handle function calls from output item
                 if let async_openai::types::responses::OutputItem::FunctionCall(fc) = e.item {
                     let args_value: serde_json::Value = serde_json::from_str(&fc.arguments)
                         .unwrap_or_else(|_| serde_json::Value::String(fc.arguments.clone()));
-                    eprintln!("DEBUG Responses: FunctionCall id={}, call_id={}, name={}", fc.id, fc.call_id, fc.name);
                     // Only add if not already present (check both ids)
                     if !self.tool_uses.iter().any(|tu| tu.id == fc.id) {
                         self.tool_uses.push(crate::tool::ToolUse {
@@ -449,7 +407,6 @@ impl CompletionStream {
                 None
             }
             ResponseEvent::ResponseCompleted(e) => {
-                eprintln!("DEBUG Responses: Completed, status={:?}", e.response.status);
                 // Set finish reason
                 self.finish_reason = Some(if !self.tool_uses.is_empty() {
                     crate::response::FinishReason::ToolUse
@@ -473,40 +430,29 @@ impl CompletionStream {
                     finish_reason: self.finish_reason.clone(),
                 })
             }
-            ResponseEvent::ResponseFailed(e) => {
-                eprintln!("DEBUG Responses: Failed");
+            ResponseEvent::ResponseFailed(_) => {
                 self.finish_reason = Some(crate::response::FinishReason::Other);
-                if let Some(err) = e.response.error {
-                    eprintln!("DEBUG Responses: Error - {}: {}", err.code, err.message);
-                }
                 Some(StreamChunk {
                     delta: None,
                     finish_reason: Some(crate::response::FinishReason::Other),
                 })
             }
-            ResponseEvent::ResponseIncomplete(e) => {
-                eprintln!("DEBUG Responses: Incomplete");
+            ResponseEvent::ResponseIncomplete(_) => {
                 self.finish_reason = Some(crate::response::FinishReason::Length);
-                if let Some(details) = e.response.incomplete_details {
-                    eprintln!("DEBUG Responses: Incomplete reason - {}", details.reason);
-                }
                 Some(StreamChunk {
                     delta: None,
                     finish_reason: Some(crate::response::FinishReason::Length),
                 })
             }
-            ResponseEvent::ResponseError(e) => {
-                eprintln!("DEBUG Responses: Error event - {}", e.message);
+            ResponseEvent::ResponseError(_) => {
                 self.finish_reason = Some(crate::response::FinishReason::Other);
                 Some(StreamChunk {
                     delta: None,
                     finish_reason: Some(crate::response::FinishReason::Other),
                 })
             }
-            // Reasoning events
+            // Reasoning events - expose reasoning summaries to caller
             ResponseEvent::ResponseReasoningSummaryTextDelta(e) => {
-                eprintln!("DEBUG Responses: Reasoning delta");
-                // We could optionally expose reasoning tokens, for now just log
                 Some(StreamChunk {
                     delta: Some(e.delta),
                     finish_reason: None,
@@ -514,8 +460,6 @@ impl CompletionStream {
             }
             ResponseEvent::Unknown(val) => {
                 // Try to parse unknown events - async-openai might have version mismatches
-                eprintln!("DEBUG Responses: Unknown event: {}", val);
-                
                 // Check if this is a function_call_arguments.done that failed to parse
                 // (async-openai expects 'name' field but OpenAI may not send it)
                 if let Some(event_type) = val.get("type").and_then(|v| v.as_str()) {
@@ -524,11 +468,9 @@ impl CompletionStream {
                             val.get("item_id").and_then(|v| v.as_str()),
                             val.get("arguments").and_then(|v| v.as_str())
                         ) {
-                            eprintln!("DEBUG Responses: Parsed function_call_arguments.done from Unknown: item_id={}, args_len={}", item_id, arguments.len());
-                            // Get function name from accumulated_function_args or use placeholder
                             let args_value: serde_json::Value = serde_json::from_str(arguments)
                                 .unwrap_or_else(|_| serde_json::Value::String(arguments.to_string()));
-                            
+
                             // Look for existing tool use with this item_id and update it
                             // Or add if not present (name will be from OutputItemAdded event)
                             if !self.tool_uses.iter().any(|tu| tu.id == item_id) {
@@ -536,15 +478,12 @@ impl CompletionStream {
                                 if let Some(name) = self.pending_function_names.get(item_id) {
                                     // Get the call_id from OutputItemAdded (required for function_call_output)
                                     let call_id = self.pending_call_ids.get(item_id).cloned();
-                                    eprintln!("DEBUG Responses: Creating ToolUse from Unknown event: id={}, call_id={:?}, name={}", item_id, call_id, name);
                                     self.tool_uses.push(crate::tool::ToolUse {
                                         id: item_id.to_string(),
                                         call_id,
                                         name: name.clone(),
                                         input: args_value,
                                     });
-                                } else {
-                                    eprintln!("DEBUG Responses: No function name found for item_id={}", item_id);
                                 }
                             }
                         }
@@ -552,11 +491,7 @@ impl CompletionStream {
                 }
                 None
             }
-            other => {
-                // Log unhandled events for debugging
-                eprintln!("DEBUG Responses: Unhandled event variant: {:?}", other);
-                None
-            }
+            _ => None
         }
     }
 
@@ -844,11 +779,8 @@ impl CompletionStream {
 
     /// Get the final response after streaming completes
     pub fn final_response(&self) -> Option<crate::response::CompletionResponse> {
-        eprintln!("DEBUG final_response: accumulated_text={} chars, tool_uses={}, finish_reason={:?}", 
-            self.accumulated_text.len(), self.tool_uses.len(), self.finish_reason);
         // Need either text or tool uses to have a response
         if self.accumulated_text.is_empty() && self.tool_uses.is_empty() {
-            eprintln!("DEBUG final_response: Returning None - no text or tool uses!");
             return None;
         }
 
@@ -891,6 +823,8 @@ impl CompletionStream {
             code_execution_results: code_results_opt,
             google_maps_widget_token: self.google_maps_widget_token.clone(),
             reasoning_items: if self.reasoning_items.is_empty() { None } else { Some(self.reasoning_items.clone()) },
+            reasoning_summary: None, // TODO: Extract from reasoning_items if present
+            citations: None, // Not available in streaming (Anthropic)
         })
     }
 

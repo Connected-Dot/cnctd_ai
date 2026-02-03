@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.20] - 2026-02-03
+
+### Added
+- **Anthropic Citations API Support**: New `Citation` type and `citations` field in `CompletionResponse`
+  - `CitationConfig` in `RequestOptions` to enable citations
+  - `CompletionRequest::with_citations()` builder method
+  - Helper methods: `has_citations()`, `get_citations()`
+- **Extended Cache Duration**: Added `CacheControl::Extended` for 1-hour cache TTL (Anthropic)
+  - `Message::with_extended_cache()` builder method
+- **OpenAI Reasoning Summaries**: Added `reasoning_summary` field in `CompletionResponse`
+  - Helper method: `get_reasoning_summary()`
+- **Gemini 3 Thinking Level**: New `ThinkingLevel` enum (`Low`, `High`) for controlling reasoning depth
+  - `CompletionRequest::with_thinking_level()` builder method
+- **Gemini 3 Media Resolution**: New `MediaResolution` enum (`Low`, `Medium`, `High`, `UltraHigh`)
+  - `CompletionRequest::with_media_resolution()` builder method
+- **OpenAI Native MCP Support**: New `McpServerConfig` and `McpApprovalMode` types
+  - `CompletionRequest::with_mcp_server()` builder method
+- **OpenAI Built-in Tools**: Added `OpenAiCodeInterpreter`, `OpenAiWebSearch`, `OpenAiImageGeneration` to `BuiltInTool`
+  - Builder methods: `with_openai_code_interpreter()`, `with_openai_web_search()`, `with_openai_image_generation()`
+- Optional `tracing` feature for configurable logging
+
+### Changed
+- Removed all debug `eprintln!` statements from production code
+- Bumped version to 0.1.19
+
+### Fixed
+- Cleaned up streaming code in `stream.rs` and `client/openai_responses.rs`
+
 ## [Unreleased]
 
 ### Added

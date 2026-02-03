@@ -50,7 +50,6 @@ fn build_input(request: &CompletionRequest) -> Input {
                             "call_id": result.effective_call_id(),
                             "output": result.content
                         });
-                        eprintln!("DEBUG Responses: Building function_call_output with call_id={}", result.effective_call_id());
                         items.push(InputItem::Custom(output_item));
                     }
                     continue;
@@ -117,11 +116,10 @@ fn build_input(request: &CompletionRequest) -> Input {
                 // Include reasoning items FIRST (required for GPT-5.2-pro before function calls)
                 if let Some(reasoning_items) = &msg.reasoning_items {
                     for reasoning in reasoning_items {
-                        eprintln!("DEBUG Responses: Including reasoning item in request: {:?}", reasoning.get("id"));
                         items.push(InputItem::Custom(reasoning.clone()));
                     }
                 }
-                
+
                 // For assistant messages with tool uses, include the function calls
                 if let Some(tool_uses) = &msg.tool_uses {
                     for tu in tool_uses {
@@ -129,7 +127,6 @@ fn build_input(request: &CompletionRequest) -> Input {
                         // - id field must be the fc_... format (tu.id)
                         // - call_id field should be the call_... format (tu.call_id)
                         let call_id = tu.call_id.as_ref().unwrap_or(&tu.id);
-                        eprintln!("DEBUG Responses: Building function_call with id={}, call_id={}", tu.id, call_id);
                         let func_call = serde_json::json!({
                             "type": "function_call",
                             "id": tu.id,
@@ -242,16 +239,11 @@ pub(super) async fn complete(
     }
 
     let create_request = builder.build()?;
-    eprintln!("DEBUG: Responses API request: {:?}", serde_json::to_string(&create_request));
-
-    eprintln!("DEBUG: Sending Responses API request to model: {}", config.model);
 
     let response = sdk_client
         .responses()
         .create(create_request)
         .await?;
-    
-    eprintln!("DEBUG: Received Responses API response, status: {:?}", response.status);
     
     // Extract text content and tool calls from output
     let mut content = String::new();
@@ -335,6 +327,8 @@ pub(super) async fn complete(
         code_execution_results: None,
         google_maps_widget_token: None,
         reasoning_items: None,
+        reasoning_summary: None, // TODO: Extract from response if available
+        citations: None, // OpenAI doesn't support citations
     })
 }
 
@@ -376,16 +370,11 @@ pub(super) async fn stream(
     }
 
     let create_request = builder.build()?;
-    eprintln!("DEBUG: Responses API request: {:?}", serde_json::to_string(&create_request));
 
-    eprintln!("DEBUG: Creating Responses API stream for model: {}", config.model);
-    
     let stream = sdk_client
         .responses()
         .create_stream(create_request)
         .await?;
-    
-    eprintln!("DEBUG: Responses API stream created successfully");
-    
+
     Ok(CompletionStream::openai_responses(stream, config.model.clone()))
 }

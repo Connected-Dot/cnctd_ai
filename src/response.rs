@@ -22,6 +22,12 @@ pub struct CompletionResponse {
     /// Stored as raw JSON values to preserve exact format
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_items: Option<Vec<serde_json::Value>>,
+    /// Natural-language reasoning summary (OpenAI o-series models, free feature)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_summary: Option<String>,
+    /// Citations from source documents (Anthropic Citations API)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub citations: Option<Vec<Citation>>,
 }
 
 impl CompletionResponse {
@@ -65,6 +71,21 @@ impl CompletionResponse {
     /// Check if response has a Google Maps widget token
     pub fn has_maps_widget(&self) -> bool {
         self.google_maps_widget_token.is_some()
+    }
+
+    /// Check if response contains citations (Anthropic Citations API)
+    pub fn has_citations(&self) -> bool {
+        self.citations.as_ref().map(|c| !c.is_empty()).unwrap_or(false)
+    }
+
+    /// Get citations from the response (Anthropic Citations API)
+    pub fn get_citations(&self) -> Option<&Vec<Citation>> {
+        self.citations.as_ref()
+    }
+
+    /// Get the reasoning summary (OpenAI o-series models)
+    pub fn get_reasoning_summary(&self) -> Option<&str> {
+        self.reasoning_summary.as_deref()
     }
 }
 
@@ -192,4 +213,21 @@ pub enum CodeExecutionOutcome {
     OutcomeDeadlineExceeded,
     #[serde(other)]
     OutcomeUnspecified,
+}
+
+/// A citation from a source document (Anthropic Citations API)
+/// Provides precise references to the exact sentences/passages used to generate a response
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Citation {
+    /// The exact text that was cited from the source document
+    pub cited_text: String,
+    /// Index of the document this citation references (0-based)
+    pub document_index: usize,
+    /// Title of the source document, if available
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_title: Option<String>,
+    /// Start character index in the source document
+    pub start_char_index: u32,
+    /// End character index in the source document
+    pub end_char_index: u32,
 }

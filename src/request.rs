@@ -5,6 +5,7 @@ use crate::{Tool, message::Message};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BuiltInTool {
+    // Gemini tools
     /// Gemini 2.0+ Google Search grounding
     GoogleSearch,
     /// Gemini 1.5 legacy search with dynamic retrieval
@@ -25,6 +26,67 @@ pub enum BuiltInTool {
         #[serde(skip_serializing_if = "Option::is_none")]
         enable_widget: Option<bool>,
     },
+
+    // OpenAI tools
+    /// OpenAI Code Interpreter - runs Python in sandboxed containers ($0.03/container)
+    OpenAiCodeInterpreter,
+    /// OpenAI Web Search - searches the web for current information
+    OpenAiWebSearch,
+    /// OpenAI Image Generation - generates images via DALL-E
+    OpenAiImageGeneration,
+}
+
+/// Thinking level for Gemini 3 models (controls reasoning depth)
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ThinkingLevel {
+    /// Minimizes latency and cost, best for simple tasks
+    Low,
+    /// Default - maximizes reasoning depth, may take longer
+    High,
+}
+
+/// Media resolution for Gemini 3 vision (controls token usage vs detail)
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaResolution {
+    /// Lowest token usage (~280 tokens/image)
+    Low,
+    /// Balanced (~560 tokens/image)
+    Medium,
+    /// Higher detail (~1120 tokens/image)
+    High,
+    /// Maximum detail (highest token usage)
+    UltraHigh,
+}
+
+/// Configuration for Anthropic Citations API
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CitationConfig {
+    /// Enable citations in responses (requires source documents in messages)
+    pub enabled: bool,
+}
+
+/// Configuration for OpenAI native MCP server support
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    /// URL of the remote MCP server
+    pub server_url: String,
+    /// Label for the server (displayed to users)
+    pub server_label: String,
+    /// Whether to require approval before tool execution
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub require_approval: Option<McpApprovalMode>,
+}
+
+/// Approval mode for MCP tool execution
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum McpApprovalMode {
+    /// Always require approval before execution
+    Always,
+    /// Never require approval (auto-execute)
+    Never,
 }
 
 /// Location coordinates for Google Maps queries
@@ -151,6 +213,57 @@ impl CompletionRequest {
         }
         self
     }
+
+    /// Enable Anthropic Citations API for source document attribution
+    pub fn with_citations(mut self) -> Self {
+        let options = self.options.get_or_insert_with(RequestOptions::default);
+        options.citations = Some(CitationConfig { enabled: true });
+        self
+    }
+
+    /// Set Gemini 3 thinking level (Low = fast/cheap, High = deep reasoning)
+    pub fn with_thinking_level(mut self, level: ThinkingLevel) -> Self {
+        let options = self.options.get_or_insert_with(RequestOptions::default);
+        options.thinking_level = Some(level);
+        self
+    }
+
+    /// Set Gemini 3 media resolution for vision (controls token usage vs detail)
+    pub fn with_media_resolution(mut self, resolution: MediaResolution) -> Self {
+        let options = self.options.get_or_insert_with(RequestOptions::default);
+        options.media_resolution = Some(resolution);
+        self
+    }
+
+    /// Add an OpenAI native MCP server
+    pub fn with_mcp_server(mut self, url: &str, label: &str, require_approval: Option<McpApprovalMode>) -> Self {
+        let options = self.options.get_or_insert_with(RequestOptions::default);
+        let servers = options.mcp_servers.get_or_insert_with(Vec::new);
+        servers.push(McpServerConfig {
+            server_url: url.to_string(),
+            server_label: label.to_string(),
+            require_approval,
+        });
+        self
+    }
+
+    /// Enable OpenAI Code Interpreter
+    pub fn with_openai_code_interpreter(mut self) -> Self {
+        self.add_built_in_tool(BuiltInTool::OpenAiCodeInterpreter);
+        self
+    }
+
+    /// Enable OpenAI Web Search
+    pub fn with_openai_web_search(mut self) -> Self {
+        self.add_built_in_tool(BuiltInTool::OpenAiWebSearch);
+        self
+    }
+
+    /// Enable OpenAI Image Generation
+    pub fn with_openai_image_generation(mut self) -> Self {
+        self.add_built_in_tool(BuiltInTool::OpenAiImageGeneration);
+        self
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -159,4 +272,20 @@ pub struct RequestOptions {
     pub max_tokens: Option<u32>,
     pub top_p: Option<f32>,
     pub stop_sequences: Option<Vec<String>>,
+
+    /// Enable Anthropic Citations API for source document attribution
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub citations: Option<CitationConfig>,
+
+    /// Thinking level for Gemini 3 models (Low = fast, High = deep reasoning)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<ThinkingLevel>,
+
+    /// Media resolution for Gemini 3 vision (controls token usage vs detail)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_resolution: Option<MediaResolution>,
+
+    /// OpenAI native MCP server configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_servers: Option<Vec<McpServerConfig>>,
 }

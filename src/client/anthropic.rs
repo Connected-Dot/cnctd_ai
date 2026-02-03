@@ -198,6 +198,8 @@ pub(super) async fn complete(
         code_execution_results: None,
         google_maps_widget_token: None,
         reasoning_items: None,
+        reasoning_summary: None, // Anthropic doesn't have reasoning summaries
+        citations: None, // TODO: Parse citations from response when citations API is enabled
     })
 }
 

@@ -292,6 +292,12 @@ pub(super) async fn complete(
                         "googleMaps": maps_config
                     }));
                 }
+                // OpenAI-specific tools - ignored for Gemini
+                BuiltInTool::OpenAiCodeInterpreter
+                | BuiltInTool::OpenAiWebSearch
+                | BuiltInTool::OpenAiImageGeneration => {
+                    // These are OpenAI-specific tools, skip for Gemini
+                }
             }
         }
     }
@@ -527,6 +533,8 @@ pub(super) async fn complete(
         code_execution_results: code_results_opt,
         google_maps_widget_token,
         reasoning_items: None,
+        reasoning_summary: None, // Gemini has thinking summaries via Interactions API (not yet implemented)
+        citations: None, // Gemini doesn't support Anthropic-style citations
     })
 }
 
@@ -752,6 +760,12 @@ pub(super) async fn stream(
                     tools_array.push(serde_json::json!({
                         "googleMaps": maps_config
                     }));
+                }
+                // OpenAI-specific tools - ignored for Gemini
+                BuiltInTool::OpenAiCodeInterpreter
+                | BuiltInTool::OpenAiWebSearch
+                | BuiltInTool::OpenAiImageGeneration => {
+                    // These are OpenAI-specific tools, skip for Gemini
                 }
             }
         }

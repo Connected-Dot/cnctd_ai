@@ -486,9 +486,11 @@ fn convert_result_line(line: AnthropicBatchResultLine) -> BatchResult {
                 model: msg.model,
                 tool_uses: tool_uses_opt,
                 grounding_metadata: None,
-        code_execution_results: None,
-        google_maps_widget_token: None,
-        reasoning_items: None,
+                code_execution_results: None,
+                google_maps_widget_token: None,
+                reasoning_items: None,
+                reasoning_summary: None,
+                citations: None, // TODO: Parse from batch response
             })
         } else {
             BatchResultType::Error(BatchItemError {
