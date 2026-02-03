@@ -152,6 +152,7 @@ pub(super) async fn complete(
         role: crate::message::Role::Assistant,
         content: choice.message.content.clone().unwrap_or_default(),
         images: None,
+        videos: None,
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
         tool_results: None,

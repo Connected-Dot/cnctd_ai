@@ -467,6 +467,7 @@ fn convert_result_line(line: AnthropicBatchResultLine) -> BatchResult {
                     role: Role::Assistant,
                     content,
                     images: None,
+                    videos: None,
                     tool_uses: tool_uses_opt.clone(),
                     tool_call_id: None,
                     tool_results: None,

@@ -108,6 +108,172 @@ impl Client {
     }
 
     // =========================================================================
+    // Video Analysis API methods
+    // =========================================================================
+
+    /// Analyze video content using vision-capable models.
+    ///
+    /// Supported by:
+    /// - **Gemini**: Native video support with File API, inline data, and YouTube URLs
+    /// - **OpenAI**: Frame-based analysis (requires pre-extracted frames)
+    /// - **Anthropic**: Not supported
+    ///
+    /// # Example (Gemini - native video)
+    ///
+    /// ```rust,no_run
+    /// use cnctd_ai::{Client, VideoAnalysisRequest};
+    ///
+    /// // Analyze a local video file
+    /// let request = VideoAnalysisRequest::new("video.mp4", "Describe what happens in this video");
+    /// let response = client.analyze_video(request).await?;
+    ///
+    /// // Analyze a YouTube video
+    /// let request = VideoAnalysisRequest::new(
+    ///     "https://www.youtube.com/watch?v=abc123",
+    ///     "Summarize the main points"
+    /// );
+    ///
+    /// // With video clipping and frame rate options
+    /// let request = VideoAnalysisRequest::new("video.mp4", "What happens?")
+    ///     .with_fps(2.0)
+    ///     .with_start_offset(30.0)
+    ///     .with_end_offset(60.0);
+    /// ```
+    ///
+    /// # Example (OpenAI - frame-based)
+    ///
+    /// ```rust,no_run
+    /// use cnctd_ai::{Client, VideoAnalysisRequest, ImageContent};
+    ///
+    /// // Extract frames externally (e.g., ffmpeg -i video.mp4 -vf "fps=2" frame_%04d.jpg)
+    /// let frames: Vec<ImageContent> = /* load extracted frames */;
+    /// let request = VideoAnalysisRequest::from_frames(frames, "Describe the video");
+    /// let response = client.analyze_video(request).await?;
+    /// ```
+    pub async fn analyze_video(
+        &self,
+        request: crate::video::VideoAnalysisRequest,
+    ) -> Result<crate::video::VideoAnalysisResponse> {
+        match &self.provider {
+            ProviderType::Gemini { config } => {
+                crate::video::gemini_analyze(config, &request).await
+            }
+            ProviderType::OpenAi { sdk_client, config } => {
+                crate::video::openai_analyze(sdk_client, config, &request).await
+            }
+            ProviderType::Anthropic { .. } => {
+                Err(Error::UnsupportedOperation(
+                    "Anthropic does not support video analysis - use Gemini or OpenAI client".to_string()
+                ))
+            }
+        }
+    }
+
+    // =========================================================================
+    // Text-to-Speech API methods
+    // =========================================================================
+
+    /// Generate speech from text.
+    ///
+    /// Supported by:
+    /// - **OpenAI**: tts-1, tts-1-hd, gpt-4o-mini-tts models
+    /// - **Gemini**: gemini-2.5-flash-preview-tts, gemini-2.5-pro-preview-tts
+    /// - **Anthropic**: Not supported
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use cnctd_ai::{Client, SpeechRequest, Voice, AudioFormat};
+    ///
+    /// // Simple TTS
+    /// let request = SpeechRequest::new("Hello, world!");
+    /// let response = client.generate_speech(request).await?;
+    /// response.save("hello.mp3").await?;
+    ///
+    /// // With options
+    /// let request = SpeechRequest::new("Welcome to the future!")
+    ///     .with_voice(Voice::Nova)
+    ///     .with_speed(1.2)
+    ///     .with_format(AudioFormat::Mp3);
+    /// let response = client.generate_speech(request).await?;
+    ///
+    /// // With style instructions (OpenAI gpt-4o-mini-tts only)
+    /// let request = SpeechRequest::new("Your order has been shipped!")
+    ///     .with_instructions("Speak cheerfully like a friendly customer service agent")
+    ///     .with_model("gpt-4o-mini-tts");
+    /// ```
+    pub async fn generate_speech(
+        &self,
+        request: crate::tts::SpeechRequest,
+    ) -> Result<crate::tts::SpeechResponse> {
+        match &self.provider {
+            ProviderType::OpenAi { sdk_client, config } => {
+                crate::tts::openai_generate(sdk_client, config, &request).await
+            }
+            ProviderType::Gemini { config } => {
+                crate::tts::gemini_generate(config, &request).await
+            }
+            ProviderType::Anthropic { .. } => {
+                Err(Error::UnsupportedOperation(
+                    "Anthropic does not support text-to-speech - use OpenAI or Gemini client".to_string()
+                ))
+            }
+        }
+    }
+
+    // =========================================================================
+    // Image Generation API methods
+    // =========================================================================
+
+    /// Generate images from text prompts.
+    ///
+    /// Supported by:
+    /// - **Gemini**: Native image generation via Nano Banana models
+    /// - **OpenAI**: GPT Image models (gpt-image-1, gpt-image-1.5)
+    /// - **Anthropic**: Not supported
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use cnctd_ai::{Client, ImageGenerationRequest, AspectRatio, ImageQuality};
+    ///
+    /// // Simple generation
+    /// let request = ImageGenerationRequest::new("A sunset over mountains");
+    /// let response = client.generate_image(request).await?;
+    ///
+    /// // Save the first image
+    /// if let Some(image) = response.first() {
+    ///     image.save("sunset.png").await?;
+    /// }
+    ///
+    /// // With options
+    /// let request = ImageGenerationRequest::new("A futuristic cityscape")
+    ///     .landscape()
+    ///     .high_quality()
+    ///     .with_count(2);
+    /// let response = client.generate_image(request).await?;
+    /// response.save_all("./output", "cityscape").await?;
+    /// ```
+    pub async fn generate_image(
+        &self,
+        request: crate::image_gen::ImageGenerationRequest,
+    ) -> Result<crate::image_gen::ImageGenerationResponse> {
+        match &self.provider {
+            ProviderType::Gemini { config } => {
+                crate::image_gen::gemini_generate(config, &request).await
+            }
+            ProviderType::OpenAi { sdk_client, config } => {
+                crate::image_gen::openai_generate(sdk_client, config, &request).await
+            }
+            ProviderType::Anthropic { .. } => {
+                Err(Error::UnsupportedOperation(
+                    "Anthropic does not support image generation - use Gemini or OpenAI client".to_string()
+                ))
+            }
+        }
+    }
+
+    // =========================================================================
     // Transcription API methods
     // =========================================================================
 

@@ -11,6 +11,9 @@ pub mod agent;
 pub mod batch;
 pub mod embeddings;
 pub mod transcription;
+pub mod video;
+pub mod image_gen;
+pub mod tts;
 
 pub use client::{Client, ClientOptions, AnthropicConfig, OpenAiConfig, GeminiConfig};
 pub use error::{Error, Result};
@@ -80,6 +83,32 @@ pub use transcription::{
     TranscriptSegment,
     AudioInput,
     Speaker,
+};
+
+// Re-export video analysis types
+pub use video::{
+    VideoInput,
+    VideoContent,
+    VideoAnalysisRequest,
+    VideoAnalysisResponse,
+};
+
+// Re-export image generation types
+pub use image_gen::{
+    ImageGenerationRequest,
+    ImageGenerationResponse,
+    GeneratedImage,
+    AspectRatio,
+    ImageQuality,
+    ImageFormat,
+};
+
+// Re-export TTS types
+pub use tts::{
+    SpeechRequest,
+    SpeechResponse,
+    Voice,
+    AudioFormat,
 };
 
 // Re-export Tool from rmcp (replaces custom Tool struct)

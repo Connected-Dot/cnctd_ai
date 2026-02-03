@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ToolUse;
+use crate::video::VideoContent;
 
 /// Image content for vision-capable models
 /// Supports base64-encoded image data
@@ -42,7 +43,7 @@ impl ImageContent {
     }
 }
 
-/// A part of message content - can be text or image
+/// A part of message content - can be text, image, or video
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
@@ -50,6 +51,8 @@ pub enum ContentPart {
     Text { text: String },
     /// Image content (base64 encoded)
     Image(ImageContent),
+    /// Video content (base64 encoded)
+    Video(VideoContent),
 }
 
 /// Represents a single tool result (tool_call_id + content)
@@ -145,6 +148,9 @@ pub struct Message {
     /// Images attached to this message (for vision-capable models)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<ImageContent>>,
+    /// Videos attached to this message (for vision-capable models)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub videos: Option<Vec<VideoContent>>,
     // Internal fields for tool tracking
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tool_uses: Option<Vec<ToolUse>>,
@@ -165,6 +171,7 @@ impl Message {
             role: Role::User,
             content: content.into(),
             images: None,
+            videos: None,
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
@@ -179,6 +186,7 @@ impl Message {
             role: Role::User,
             content: content.into(),
             images: Some(vec![image]),
+            videos: None,
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
@@ -196,6 +204,7 @@ impl Message {
             } else {
                 Some(images)
             },
+            videos: None,
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
@@ -203,16 +212,50 @@ impl Message {
         }
     }
 
-    /// Create a user message with multipart content (text and images in any order)
+    /// Create a user message with a single video
+    pub fn user_with_video(content: impl Into<String>, video: VideoContent) -> Self {
+        Self {
+            role: Role::User,
+            content: content.into(),
+            images: None,
+            videos: Some(vec![video]),
+            tool_uses: None,
+            tool_call_id: None,
+            tool_results: None,
+            reasoning_items: None,
+        }
+    }
+
+    /// Create a user message with multiple videos
+    pub fn user_with_videos(content: impl Into<String>, videos: Vec<VideoContent>) -> Self {
+        Self {
+            role: Role::User,
+            content: content.into(),
+            images: None,
+            videos: if videos.is_empty() {
+                None
+            } else {
+                Some(videos)
+            },
+            tool_uses: None,
+            tool_call_id: None,
+            tool_results: None,
+            reasoning_items: None,
+        }
+    }
+
+    /// Create a user message with multipart content (text, images, and videos in any order)
     /// Use this when you need fine control over content ordering
     pub fn user_multipart(parts: Vec<ContentPart>) -> Self {
         let mut text_parts = Vec::new();
         let mut images = Vec::new();
+        let mut videos = Vec::new();
 
         for part in parts {
             match part {
                 ContentPart::Text { text } => text_parts.push(text),
                 ContentPart::Image(img) => images.push(img),
+                ContentPart::Video(vid) => videos.push(vid),
             }
         }
 
@@ -223,6 +266,11 @@ impl Message {
                 None
             } else {
                 Some(images)
+            },
+            videos: if videos.is_empty() {
+                None
+            } else {
+                Some(videos)
             },
             tool_uses: None,
             tool_call_id: None,
@@ -236,6 +284,7 @@ impl Message {
             role: Role::Assistant,
             content: content.into(),
             images: None,
+            videos: None,
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
@@ -248,6 +297,7 @@ impl Message {
             role: Role::System,
             content: content.into(),
             images: None,
+            videos: None,
             tool_uses: None,
             tool_call_id: None,
             tool_results: None,
@@ -261,6 +311,7 @@ impl Message {
             role: Role::Assistant,
             content: String::new(),
             images: None,
+            videos: None,
             tool_uses: Some(vec![tool_use]),
             tool_call_id: None,
             tool_results: None,
@@ -274,6 +325,7 @@ impl Message {
             role: Role::Assistant,
             content: String::new(),
             images: None,
+            videos: None,
             tool_uses: if tool_uses.is_empty() {
                 None
             } else {
@@ -294,6 +346,7 @@ impl Message {
             role: Role::Assistant,
             content: content.into(),
             images: None,
+            videos: None,
             tool_uses: if tool_uses.is_empty() {
                 None
             } else {
@@ -311,6 +364,7 @@ impl Message {
             role: Role::User,
             content: content.into(),
             images: None,
+            videos: None,
             tool_uses: None,
             tool_call_id: Some(tool_call_id),
             tool_results: None,
@@ -325,6 +379,7 @@ impl Message {
             role: Role::User,
             content: String::new(),
             images: None,
+            videos: None,
             tool_uses: None,
             tool_call_id: None,
             tool_results: if results.is_empty() {
@@ -339,6 +394,11 @@ impl Message {
     /// Check if this message has images attached
     pub fn has_images(&self) -> bool {
         self.images.as_ref().map(|i| !i.is_empty()).unwrap_or(false)
+    }
+
+    /// Check if this message has videos attached
+    pub fn has_videos(&self) -> bool {
+        self.videos.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
     }
 
     /// Check if this message contains tool results

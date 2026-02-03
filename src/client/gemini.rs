@@ -122,8 +122,8 @@ pub(super) async fn complete(
                             }
                         }]
                     }));
-                } else if msg.has_images() {
-                    // Message with images (vision support)
+                } else if msg.has_images() || msg.has_videos() {
+                    // Message with images/videos (vision support)
                     let mut parts = Vec::new();
 
                     // Add images first
@@ -133,6 +133,18 @@ pub(super) async fn complete(
                                 "inlineData": {
                                     "mimeType": image.media_type,
                                     "data": image.data
+                                }
+                            }));
+                        }
+                    }
+
+                    // Add videos
+                    if let Some(videos) = &msg.videos {
+                        for video in videos {
+                            parts.push(serde_json::json!({
+                                "inlineData": {
+                                    "mimeType": video.media_type,
+                                    "data": video.data
                                 }
                             }));
                         }
@@ -473,6 +485,7 @@ pub(super) async fn complete(
         role: crate::message::Role::Assistant,
         content,
         images: None,
+        videos: None,
         tool_uses: tool_uses_opt.clone(),
         tool_call_id: None,
         tool_results: None,
@@ -552,8 +565,8 @@ pub(super) async fn stream(
                             }
                         }]
                     }));
-                } else if msg.has_images() {
-                    // Message with images (vision support)
+                } else if msg.has_images() || msg.has_videos() {
+                    // Message with images/videos (vision support)
                     let mut parts = Vec::new();
 
                     // Add images first
@@ -563,6 +576,18 @@ pub(super) async fn stream(
                                 "inlineData": {
                                     "mimeType": image.media_type,
                                     "data": image.data
+                                }
+                            }));
+                        }
+                    }
+
+                    // Add videos
+                    if let Some(videos) = &msg.videos {
+                        for video in videos {
+                            parts.push(serde_json::json!({
+                                "inlineData": {
+                                    "mimeType": video.media_type,
+                                    "data": video.data
                                 }
                             }));
                         }
