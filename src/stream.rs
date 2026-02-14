@@ -2,6 +2,26 @@ use futures::StreamExt;
 use eventsource_stream::Eventsource;
 use crate::response::{GroundingMetadata, CodeExecutionResult};
 
+/// Events related to tool use during streaming.
+///
+/// These events let callers observe tool use lifecycle in real-time
+/// rather than waiting for `final_response()` after the stream ends.
+#[derive(Debug, Clone)]
+pub enum ToolUseEvent {
+    /// A new tool call has started. Name and ID are known.
+    Start {
+        id: String,
+        name: String,
+    },
+    /// Incremental JSON fragment for the tool input (Anthropic/OpenAI only).
+    InputDelta {
+        id: String,
+        delta: String,
+    },
+    /// Tool call input is fully assembled and ready for execution.
+    Complete(crate::tool::ToolUse),
+}
+
 /// A chunk of streaming completion data
 #[derive(Debug, Clone)]
 pub struct StreamChunk {
@@ -9,6 +29,8 @@ pub struct StreamChunk {
     pub delta: Option<String>,
     /// The finish reason, if this is the final chunk
     pub finish_reason: Option<crate::response::FinishReason>,
+    /// Tool use lifecycle event, if any
+    pub tool_use_event: Option<ToolUseEvent>,
 }
 
 impl StreamChunk {
@@ -175,19 +197,31 @@ impl CompletionStream {
                             
                             if let Some(choice) = response.choices.get(0) {
                                 // Handle tool calls
+                                let mut tool_event: Option<ToolUseEvent> = None;
                                 if let Some(tool_calls) = &choice.delta.tool_calls {
                                     for tool_call in tool_calls {
                                         if let Some(function) = &tool_call.function {
                                             if let Some(name) = &function.name {
+                                                let id = tool_call.id.clone().unwrap_or_default();
                                                 self.tool_uses.push(crate::tool::ToolUse { call_id: None,
-                                                    id: tool_call.id.clone().unwrap_or_default(),
+                                                    id: id.clone(),
                                                     name: name.clone(),
                                                     input: serde_json::json!({}),
                                                 });
+                                                tool_event = Some(ToolUseEvent::Start {
+                                                    id,
+                                                    name: name.clone(),
+                                                });
                                             }
-                                            
+
                                             if let Some(arguments) = &function.arguments {
                                                 if let Some(last_tool) = self.tool_uses.last_mut() {
+                                                    if tool_event.is_none() {
+                                                        tool_event = Some(ToolUseEvent::InputDelta {
+                                                            id: last_tool.id.clone(),
+                                                            delta: arguments.clone(),
+                                                        });
+                                                    }
                                                     if let Some(current_args) = last_tool.input.as_str() {
                                                         let combined = format!("{}{}", current_args, arguments);
                                                         last_tool.input = serde_json::from_str(&combined)
@@ -201,11 +235,21 @@ impl CompletionStream {
                                     }
                                 }
                                 
+                                // If we have a tool event but no text, yield it
+                                if tool_event.is_some() {
+                                    return Some(Ok(StreamChunk {
+                                        delta: None,
+                                        finish_reason: None,
+                                        tool_use_event: tool_event,
+                                    }));
+                                }
+
                                 if let Some(content) = &choice.delta.content {
                                     self.accumulated_text.push_str(content);
                                     return Some(Ok(StreamChunk {
                                         delta: Some(content.clone()),
                                         finish_reason: None,
+                                        tool_use_event: None,
                                     }));
                                 }
                                 
@@ -221,9 +265,16 @@ impl CompletionStream {
                             }
 
                             if self.finish_reason.is_some() || !self.tool_uses.is_empty() || has_usage_update {
+                                // Emit Complete events for finalized tool uses
+                                let complete_event = if self.finish_reason == Some(crate::response::FinishReason::ToolUse) {
+                                    self.tool_uses.last().map(|tu| ToolUseEvent::Complete(tu.clone()))
+                                } else {
+                                    None
+                                };
                                 return Some(Ok(StreamChunk {
                                     delta: None,
                                     finish_reason: self.finish_reason.clone(),
+                                    tool_use_event: complete_event,
                                 }));
                             }
 
@@ -298,6 +349,14 @@ impl CompletionStream {
                 if let async_openai::types::responses::OutputItem::FunctionCall(fc) = &e.item {
                     self.pending_function_names.insert(fc.id.clone(), fc.name.clone());
                     self.pending_call_ids.insert(fc.id.clone(), fc.call_id.clone());
+                    return Some(StreamChunk {
+                        delta: None,
+                        finish_reason: None,
+                        tool_use_event: Some(ToolUseEvent::Start {
+                            id: fc.id.clone(),
+                            name: fc.name.clone(),
+                        }),
+                    });
                 }
                 None
             }
@@ -306,6 +365,7 @@ impl CompletionStream {
                 Some(StreamChunk {
                     delta: Some(e.delta),
                     finish_reason: None,
+                    tool_use_event: None,
                 })
             }
             ResponseEvent::ResponseOutputTextDone(e) => {
@@ -315,6 +375,7 @@ impl CompletionStream {
                     return Some(StreamChunk {
                         delta: Some(e.text),
                         finish_reason: None,
+                        tool_use_event: None,
                     });
                 }
                 None
@@ -327,6 +388,7 @@ impl CompletionStream {
                         return Some(StreamChunk {
                             delta: Some(text.clone()),
                             finish_reason: None,
+                            tool_use_event: None,
                         });
                     }
                 }
@@ -342,6 +404,7 @@ impl CompletionStream {
                         return Some(StreamChunk {
                             delta: Some(text.clone()),
                             finish_reason: None,
+                            tool_use_event: None,
                         });
                     }
                 }
@@ -349,9 +412,18 @@ impl CompletionStream {
             }
             ResponseEvent::ResponseFunctionCallArgumentsDelta(e) => {
                 // Accumulate function call arguments
+                let item_id = e.item_id.clone();
+                let delta = e.delta.clone();
                 let entry = self.accumulated_function_args.entry(e.item_id).or_default();
-                entry.push_str(&e.delta);
-                None
+                entry.push_str(&delta);
+                Some(StreamChunk {
+                    delta: None,
+                    finish_reason: None,
+                    tool_use_event: Some(ToolUseEvent::InputDelta {
+                        id: item_id,
+                        delta,
+                    }),
+                })
             }
             ResponseEvent::ResponseFunctionCallArgumentsDone(e) => {
                 // Create tool use from accumulated arguments
@@ -359,13 +431,19 @@ impl CompletionStream {
                     .unwrap_or_else(|_| serde_json::Value::String(e.arguments.clone()));
                 // Get the call_id from OutputItemAdded (required for function_call_output)
                 let call_id = self.pending_call_ids.get(&e.item_id).cloned();
-                self.tool_uses.push(crate::tool::ToolUse {
+                let tool_use = crate::tool::ToolUse {
                     id: e.item_id.clone(),
                     call_id,
                     name: e.name,
                     input: args_value,
-                });
-                None
+                };
+                let event = ToolUseEvent::Complete(tool_use.clone());
+                self.tool_uses.push(tool_use);
+                Some(StreamChunk {
+                    delta: None,
+                    finish_reason: None,
+                    tool_use_event: Some(event),
+                })
             }
             ResponseEvent::ResponseOutputItemDone(e) => {
                 // Capture reasoning items for continuation requests (GPT-5.2-pro requirement)
@@ -396,11 +474,18 @@ impl CompletionStream {
                         .unwrap_or_else(|_| serde_json::Value::String(fc.arguments.clone()));
                     // Only add if not already present (check both ids)
                     if !self.tool_uses.iter().any(|tu| tu.id == fc.id) {
-                        self.tool_uses.push(crate::tool::ToolUse {
-                            id: fc.id,           // Use fc.id (fc_...) for primary ID
-                            call_id: Some(fc.call_id), // Store call_id for function_call_output
+                        let tool_use = crate::tool::ToolUse {
+                            id: fc.id,
+                            call_id: Some(fc.call_id),
                             name: fc.name,
                             input: args_value,
+                        };
+                        let event = ToolUseEvent::Complete(tool_use.clone());
+                        self.tool_uses.push(tool_use);
+                        return Some(StreamChunk {
+                            delta: None,
+                            finish_reason: None,
+                            tool_use_event: Some(event),
                         });
                     }
                 }
@@ -428,6 +513,7 @@ impl CompletionStream {
                 Some(StreamChunk {
                     delta: None,
                     finish_reason: self.finish_reason.clone(),
+                    tool_use_event: None,
                 })
             }
             ResponseEvent::ResponseFailed(_) => {
@@ -435,6 +521,7 @@ impl CompletionStream {
                 Some(StreamChunk {
                     delta: None,
                     finish_reason: Some(crate::response::FinishReason::Other),
+                    tool_use_event: None,
                 })
             }
             ResponseEvent::ResponseIncomplete(_) => {
@@ -442,6 +529,7 @@ impl CompletionStream {
                 Some(StreamChunk {
                     delta: None,
                     finish_reason: Some(crate::response::FinishReason::Length),
+                    tool_use_event: None,
                 })
             }
             ResponseEvent::ResponseError(_) => {
@@ -449,6 +537,7 @@ impl CompletionStream {
                 Some(StreamChunk {
                     delta: None,
                     finish_reason: Some(crate::response::FinishReason::Other),
+                    tool_use_event: None,
                 })
             }
             // Reasoning events - expose reasoning summaries to caller
@@ -456,6 +545,7 @@ impl CompletionStream {
                 Some(StreamChunk {
                     delta: Some(e.delta),
                     finish_reason: None,
+                    tool_use_event: None,
                 })
             }
             ResponseEvent::Unknown(val) => {
@@ -537,10 +627,15 @@ impl CompletionStream {
                         let id = content_block["id"].as_str().unwrap_or("").to_string();
                         let name = content_block["name"].as_str().unwrap_or("").to_string();
                         self.tool_uses.push(crate::tool::ToolUse { call_id: None,
-                            id,
-                            name,
+                            id: id.clone(),
+                            name: name.clone(),
                             input: serde_json::json!({}), // Will be filled by deltas
                         });
+                        return Some(Some(StreamChunk {
+                            delta: None,
+                            finish_reason: None,
+                            tool_use_event: Some(ToolUseEvent::Start { id, name }),
+                        }));
                     }
                 }
                 Some(None) // Continue to next event
@@ -551,6 +646,8 @@ impl CompletionStream {
                     if delta["type"].as_str() == Some("input_json_delta") {
                         // Accumulate JSON input to the last tool
                         if let (Some(partial_json), Some(last_tool)) = (delta["partial_json"].as_str(), self.tool_uses.last_mut()) {
+                            let tool_id = last_tool.id.clone();
+                            let json_fragment = partial_json.to_string();
                             // Anthropic streams JSON as strings, accumulate and parse
                             if let Some(current_input) = last_tool.input.as_str() {
                                 let combined = format!("{}{}", current_input, partial_json);
@@ -561,6 +658,14 @@ impl CompletionStream {
                                 // First chunk of input
                                 last_tool.input = serde_json::Value::String(partial_json.to_string());
                             }
+                            return Some(Some(StreamChunk {
+                                delta: None,
+                                finish_reason: None,
+                                tool_use_event: Some(ToolUseEvent::InputDelta {
+                                    id: tool_id,
+                                    delta: json_fragment,
+                                }),
+                            }));
                         }
                         Some(None) // Continue, no text to return
                     } else if let Some(text) = delta["text"].as_str() {
@@ -569,6 +674,7 @@ impl CompletionStream {
                         Some(Some(StreamChunk {
                             delta: Some(text.to_string()),
                             finish_reason: None,
+                            tool_use_event: None,
                         }))
                     } else {
                         Some(None)
@@ -579,6 +685,7 @@ impl CompletionStream {
             }
             "content_block_stop" => {
                 // Finalize the last tool's JSON input if needed
+                let mut complete_event = None;
                 if let Some(last_tool) = self.tool_uses.last_mut() {
                     if let Some(json_str) = last_tool.input.as_str() {
                         // Try final parse of accumulated JSON
@@ -590,6 +697,17 @@ impl CompletionStream {
                     if !last_tool.input.is_object() {
                         last_tool.input = serde_json::json!({});
                     }
+                    // Only emit Complete for tool_use blocks (not text blocks)
+                    if !last_tool.id.is_empty() {
+                        complete_event = Some(ToolUseEvent::Complete(last_tool.clone()));
+                    }
+                }
+                if complete_event.is_some() {
+                    return Some(Some(StreamChunk {
+                        delta: None,
+                        finish_reason: None,
+                        tool_use_event: complete_event,
+                    }));
                 }
                 Some(None) // Continue to next event
             }
@@ -663,26 +781,30 @@ impl CompletionStream {
         };
 
         let mut text_delta = String::new();
-        
+        let mut tool_event: Option<ToolUseEvent> = None;
+
         for part in parts {
             // Handle text content
             if let Some(text) = part["text"].as_str() {
                 text_delta.push_str(text);
             }
-            
+
             // Handle function calls
             if let Some(function_call) = part["functionCall"].as_object() {
                 let name = function_call["name"].as_str().unwrap_or("").to_string();
                 let args = function_call.get("args").cloned().unwrap_or(serde_json::json!({}));
-                
+
                 // Generate a unique ID (Gemini doesn't provide one)
                 let id = format!("gemini_call_{}", uuid::Uuid::new_v4());
-                
-                self.tool_uses.push(crate::tool::ToolUse { call_id: None,
+
+                let tool_use = crate::tool::ToolUse { call_id: None,
                     id,
                     name,
                     input: args,
-                });
+                };
+                // Gemini sends complete tool calls, so emit Complete directly
+                tool_event = Some(ToolUseEvent::Complete(tool_use.clone()));
+                self.tool_uses.push(tool_use);
             }
 
             // Handle executable code part (for code execution billing)
@@ -763,6 +885,7 @@ impl CompletionStream {
             return Some(Some(StreamChunk {
                 delta: Some(text_delta),
                 finish_reason: None,
+                tool_use_event: None,
             }));
         }
 
@@ -771,6 +894,7 @@ impl CompletionStream {
             return Some(Some(StreamChunk {
                 delta: None,
                 finish_reason: self.finish_reason.clone(),
+                tool_use_event: tool_event,
             }));
         }
 

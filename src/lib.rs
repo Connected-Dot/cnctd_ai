@@ -33,7 +33,7 @@ pub use response::{
     CodeExecutionResult, CodeExecutionOutcome,
     Citation,
 };
-pub use stream::{CompletionStream, StreamChunk};
+pub use stream::{CompletionStream, StreamChunk, ToolUseEvent};
 pub use tool_helpers::{create_tool, create_tool_borrowed};
 
 // Re-export MCP types

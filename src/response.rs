@@ -1,5 +1,5 @@
+use crate::{message::Message, ToolUse};
 use serde::{Deserialize, Serialize};
-use crate::{ToolUse, message::Message};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompletionResponse {
@@ -43,14 +43,18 @@ impl CompletionResponse {
     /// Check if response was grounded with search results
     pub fn is_grounded(&self) -> bool {
         // Check for actual search data, not just metadata presence
-        self.grounding_metadata.as_ref()
+        self.grounding_metadata
+            .as_ref()
             .map(|m| m.web_search_queries.is_some() || m.grounding_chunks.is_some())
             .unwrap_or(false)
     }
 
     /// Get search queries used for grounding (if any)
     pub fn search_queries(&self) -> Option<&Vec<String>> {
-        self.grounding_metadata.as_ref()?.web_search_queries.as_ref()
+        self.grounding_metadata
+            .as_ref()?
+            .web_search_queries
+            .as_ref()
     }
 
     /// Get grounding sources/citations (if any)
@@ -75,7 +79,10 @@ impl CompletionResponse {
 
     /// Check if response contains citations (Anthropic Citations API)
     pub fn has_citations(&self) -> bool {
-        self.citations.as_ref().map(|c| !c.is_empty()).unwrap_or(false)
+        self.citations
+            .as_ref()
+            .map(|c| !c.is_empty())
+            .unwrap_or(false)
     }
 
     /// Get citations from the response (Anthropic Citations API)
@@ -111,11 +118,12 @@ impl Usage {
     /// Get the effective prompt tokens (non-cached portion)
     /// Returns prompt_tokens minus cache_read_tokens if available
     pub fn effective_prompt_tokens(&self) -> u32 {
-        self.prompt_tokens.saturating_sub(self.cache_read_tokens.unwrap_or(0))
+        self.prompt_tokens
+            .saturating_sub(self.cache_read_tokens.unwrap_or(0))
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     Stop,
