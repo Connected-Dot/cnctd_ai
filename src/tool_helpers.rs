@@ -1,7 +1,7 @@
 use crate::Tool;
+use serde_json::{Map, Value};
 use std::borrow::Cow;
 use std::sync::Arc;
-use serde_json::{Map, Value};
 
 pub fn create_tool(
     name: &str,
@@ -9,7 +9,7 @@ pub fn create_tool(
     schema: Value,
 ) -> Result<Tool, serde_json::Error> {
     let schema_map = serde_json::from_value::<Map<String, Value>>(schema)?;
-    
+
     Ok(Tool {
         name: Cow::Owned(name.to_string()),
         title: None,
@@ -17,6 +17,7 @@ pub fn create_tool(
         input_schema: Arc::new(schema_map),
         output_schema: None,
         annotations: None,
+        execution: None,
         icons: None,
         meta: None,
     })
@@ -28,7 +29,7 @@ pub fn create_tool_borrowed(
     schema: Value,
 ) -> Result<Tool, serde_json::Error> {
     let schema_map = serde_json::from_value::<Map<String, Value>>(schema)?;
-    
+
     Ok(Tool {
         name: Cow::Borrowed(name),
         title: None,
@@ -36,6 +37,7 @@ pub fn create_tool_borrowed(
         input_schema: Arc::new(schema_map),
         output_schema: None,
         annotations: None,
+        execution: None,
         icons: None,
         meta: None,
     })

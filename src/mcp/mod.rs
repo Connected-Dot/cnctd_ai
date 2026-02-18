@@ -46,7 +46,7 @@ mod client;
 mod gateway;
 mod util;
 
-pub use client::{McpClient, GatewayConfig, StdioConfig};
+pub use client::{McpClient, GatewayConfig, StdioConfig, StreamableHttpClient};
 pub use gateway::{McpGateway, ListServersResponse};
 pub use util::tool_result_to_string;
 

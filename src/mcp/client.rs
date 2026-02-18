@@ -1,12 +1,13 @@
 use crate::{Error, Result};
 use crate::mcp::ServerInfo;
 use reqwest::Client as HttpClient;
-use rmcp::model::{CallToolRequestParam, CallToolResult, Tool};
+use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
 use rmcp::service::{RoleClient, RunningService, ServiceExt};
-use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
+use rmcp::transport::{ConfigureCommandExt, StreamableHttpClientTransport, TokioChildProcess};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::borrow::Cow;
+use std::sync::Arc;
 use tokio::process::Command;
 
 /// JSON-RPC 2.0 request structure
@@ -104,9 +105,11 @@ impl StdioClient {
             None => None,
         };
         let result = self.service
-            .call_tool(CallToolRequestParam {
+            .call_tool(CallToolRequestParams {
+                meta: None,
                 name: Cow::Owned(tool_name.to_string()),
                 arguments: args_map,
+                task: None,
             })
             .await
             .map_err(|e| Error::ToolExecution(format!("Tool execution failed: {}", e)))?;
@@ -121,7 +124,65 @@ impl StdioClient {
     }
 }
 
-/// Unified MCP client supporting both gateway and stdio transports
+/// Streamable HTTP MCP client wrapping the rmcp service
+pub struct StreamableHttpClient {
+    service: RunningService<RoleClient, ()>,
+    url: String,
+}
+
+impl StreamableHttpClient {
+    /// List all tools available from this MCP server
+    pub async fn list_tools(&self) -> Result<Vec<Tool>> {
+        let result = self.service
+            .list_tools(None)
+            .await
+            .map_err(|e| Error::Other(format!("Failed to list tools via streamable HTTP: {}", e)))?;
+
+        Ok(result.tools)
+    }
+
+    /// Call a tool with the given arguments
+    pub async fn call_tool(
+        &self,
+        tool_name: &str,
+        arguments: Option<Value>,
+    ) -> Result<CallToolResult> {
+        let args_map = match arguments {
+            Some(Value::Object(map)) => Some(map),
+            Some(other) => {
+                return Err(Error::Other(format!(
+                    "Tool arguments must be a JSON object, got: {:?}",
+                    other
+                )));
+            }
+            None => None,
+        };
+        let result = self.service
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: Cow::Owned(tool_name.to_string()),
+                arguments: args_map,
+                task: None,
+            })
+            .await
+            .map_err(|e| Error::ToolExecution(format!("Tool execution failed: {}", e)))?;
+
+        Ok(result)
+    }
+
+    /// Get server info
+    pub async fn server_info(&self) -> Result<ServerInfo> {
+        let tools = self.list_tools().await?;
+        Ok(ServerInfo {
+            name: self.url.clone(),
+            url: Some(self.url.clone()),
+            description: None,
+            available_tools: tools,
+        })
+    }
+}
+
+/// Unified MCP client supporting gateway, stdio, and streamable HTTP transports
 pub enum McpClient {
     /// Gateway transport - communicates via HTTP with an MCP gateway
     Gateway {
@@ -130,6 +191,8 @@ pub enum McpClient {
     },
     /// Stdio transport - spawns and communicates with a local MCP server
     Stdio(StdioClient),
+    /// Streamable HTTP transport - connects to an MCP server via HTTP streaming
+    StreamableHttp(StreamableHttpClient),
 }
 
 impl McpClient {
@@ -139,6 +202,20 @@ impl McpClient {
             config,
             http_client: HttpClient::new(),
         }
+    }
+
+    /// Create a new MCP client using streamable HTTP transport
+    pub async fn from_streamable_http(url: &str) -> Result<Self> {
+        let transport = StreamableHttpClientTransport::from_uri(Arc::<str>::from(url));
+
+        let service = ().serve(transport)
+            .await
+            .map_err(|e| Error::Other(format!("Failed to initialize streamable HTTP MCP service: {}", e)))?;
+
+        Ok(Self::StreamableHttp(StreamableHttpClient {
+            service,
+            url: url.to_string(),
+        }))
     }
 
     /// Create a new MCP client using stdio transport
@@ -181,6 +258,9 @@ impl McpClient {
             Self::Stdio(client) => {
                 client.list_tools().await
             }
+            Self::StreamableHttp(client) => {
+                client.list_tools().await
+            }
         }
     }
 
@@ -197,6 +277,9 @@ impl McpClient {
             Self::Stdio(client) => {
                 client.call_tool(tool_name, arguments).await
             }
+            Self::StreamableHttp(client) => {
+                client.call_tool(tool_name, arguments).await
+            }
         }
     }
 
@@ -207,6 +290,9 @@ impl McpClient {
                 self.server_info_gateway(config, http_client).await
             }
             Self::Stdio(client) => {
+                client.server_info().await
+            }
+            Self::StreamableHttp(client) => {
                 client.server_info().await
             }
         }
