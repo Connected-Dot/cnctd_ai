@@ -1,7 +1,76 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use super::entity_dictionary::EntityType;
 use super::session::SessionState;
+use super::source::KeyInferenceOverride;
+
+/// Dynamically-built engine that maps JSON key names to entity types.
+/// Auto-derives patterns from entity type names and merges optional overrides.
+pub struct KeyInferenceEngine {
+    /// key_pattern (lowercase) -> entity_type_name
+    id_patterns: HashMap<String, String>,
+    /// All known patterns that indicate an ID field
+    id_field_set: HashSet<String>,
+}
+
+impl KeyInferenceEngine {
+    /// Build from entity type names + optional overrides from the source URL.
+    pub fn build(
+        entity_type_names: &[String],
+        overrides: &HashMap<String, KeyInferenceOverride>,
+    ) -> Self {
+        let mut id_patterns: HashMap<String, String> = HashMap::new();
+        let mut id_field_set: HashSet<String> = HashSet::new();
+
+        // Always include generic ID patterns
+        id_field_set.insert("id".to_string());
+        id_field_set.insert("_id".to_string());
+        id_field_set.insert("_ids".to_string());
+
+        for type_name in entity_type_names {
+            let t = type_name.to_lowercase();
+
+            // Auto-derive patterns: {type}_id, {type}id, {type}ids, {type}_ids
+            let auto_patterns = vec![
+                format!("{}_id", t),
+                format!("{}id", t),
+                format!("{}ids", t),
+                format!("{}_ids", t),
+            ];
+
+            for pattern in &auto_patterns {
+                id_patterns.insert(pattern.clone(), type_name.clone());
+                id_field_set.insert(pattern.clone());
+            }
+
+            // Merge overrides (additive, not replacing)
+            if let Some(overr) = overrides.get(&t) {
+                for pattern in &overr.id_patterns {
+                    let p = pattern.to_lowercase();
+                    id_patterns.insert(p.clone(), type_name.clone());
+                    id_field_set.insert(p);
+                }
+            }
+        }
+
+        Self {
+            id_patterns,
+            id_field_set,
+        }
+    }
+
+    /// Check if a JSON key name suggests it holds an entity ID.
+    pub fn is_id_field(&self, key: &str) -> bool {
+        let k = key.to_lowercase();
+        k == "id" || k.ends_with("_id") || k.ends_with("_ids") || self.id_field_set.contains(&k)
+    }
+
+    /// Infer entity type from a key name. Returns None if no match.
+    pub fn infer_entity_type(&self, key: &str) -> Option<&str> {
+        let k = key.to_lowercase();
+        self.id_patterns.get(&k).map(|s| s.as_str())
+    }
+}
 
 pub struct Obfuscator {
     session: Arc<SessionState>,
@@ -10,6 +79,13 @@ pub struct Obfuscator {
 impl Obfuscator {
     pub fn new(session: Arc<SessionState>) -> Self {
         Self { session }
+    }
+
+    /// Max token length for streaming deobfuscation buffering.
+    pub fn max_token_length(&self) -> usize {
+        self.session
+            .tokenizer
+            .max_token_length(self.session.dictionary.entity_types())
     }
 
     // ── Interception 1: User message -> LLM ────────────────────────────
@@ -43,7 +119,6 @@ impl Obfuscator {
 
     // ── Interception 4: LLM response -> client ─────────────────────────
     /// Replace tokens in LLM-generated text with real entity names.
-    /// Numeric deobfuscation is deferred to Phase 5.
     pub fn deobfuscate_llm_response(&self, text: &str) -> String {
         self.session
             .tokenizer
@@ -86,7 +161,7 @@ impl Obfuscator {
                     if let Some((entity_type, id)) = self.session.tokenizer.deobfuscate_token(s) {
                         // If used in a context that expects an ID (numeric), return the ID
                         // Otherwise return the name
-                        if let Some(record) = self.session.dictionary.lookup_by_id(entity_type, id)
+                        if let Some(record) = self.session.dictionary.lookup_by_id(&entity_type, id)
                         {
                             return serde_json::Value::String(record.name.clone());
                         }
@@ -108,7 +183,7 @@ impl Obfuscator {
                 let mut new_obj = serde_json::Map::new();
                 for (k, v) in obj {
                     // Check if this key expects an ID value
-                    let new_v = if self.is_id_field(k) {
+                    let new_v = if self.session.key_inference.is_id_field(k) {
                         self.deobfuscate_to_id(v)
                     } else {
                         self.walk_json_deobfuscate(v)
@@ -119,16 +194,6 @@ impl Obfuscator {
             }
             _ => value.clone(),
         }
-    }
-
-    /// Check if a JSON key name suggests it holds an entity ID.
-    fn is_id_field(&self, key: &str) -> bool {
-        let k = key.to_lowercase();
-        k.ends_with("_id")
-            || k.ends_with("_ids")
-            || k == "id"
-            || k == "channelids"
-            || k == "bidderids"
     }
 
     /// If the value is a token string, replace with the numeric ID.
@@ -166,7 +231,7 @@ impl Obfuscator {
             serde_json::Value::Number(n) => {
                 if let Some(key) = parent_key {
                     // Check if this key is an entity ID field
-                    if self.is_id_field(key) {
+                    if self.session.key_inference.is_id_field(key) {
                         if let Some(f) = n.as_i64() {
                             // Try to find entity and replace with token
                             return self.try_obfuscate_id_value(key, f as i32);
@@ -200,46 +265,23 @@ impl Obfuscator {
     }
 
     /// Try to replace a numeric ID with an entity token.
-    /// Checks all entity types for this key prefix.
+    /// Checks the inferred entity type first, then falls back to trying all types.
     fn try_obfuscate_id_value(&self, key: &str, id: i32) -> serde_json::Value {
-        // Infer entity type from key name
-        let entity_type = self.infer_entity_type_from_key(key);
-
-        if let Some(et) = entity_type {
+        // Try inferred entity type first
+        if let Some(et) = self.session.key_inference.infer_entity_type(key) {
             if let Some(token) = self.session.tokenizer.obfuscate_id(et, id) {
                 return serde_json::Value::String(token.to_string());
             }
         }
 
-        // If we can't infer the type, try all types
-        for et in EntityType::all() {
-            if let Some(token) = self.session.tokenizer.obfuscate_id(*et, id) {
+        // Fallback: try all known entity types
+        for et in self.session.dictionary.entity_types() {
+            if let Some(token) = self.session.tokenizer.obfuscate_id(et, id) {
                 return serde_json::Value::String(token.to_string());
             }
         }
 
         // Not a known entity ID, pass through
         serde_json::Value::Number(serde_json::Number::from(id))
-    }
-
-    fn infer_entity_type_from_key(&self, key: &str) -> Option<EntityType> {
-        let k = key.to_lowercase();
-        if k.contains("channel") {
-            Some(EntityType::Channel)
-        } else if k.contains("bidder") {
-            Some(EntityType::Bidder)
-        } else if k.contains("advertiser") {
-            Some(EntityType::Advertiser)
-        } else if k.contains("agency") {
-            Some(EntityType::Agency)
-        } else if k.contains("order") {
-            Some(EntityType::Order)
-        } else if k.contains("line_item") || k.contains("lineitem") {
-            Some(EntityType::LineItem)
-        } else if k.contains("trafficker") {
-            Some(EntityType::Trafficker)
-        } else {
-            None
-        }
     }
 }

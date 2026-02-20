@@ -31,6 +31,10 @@ async fn main() {
         .route("/tools", get(routes::chat::list_tools))
         .route("/agents/run", post(routes::agents::run_agent))
         .route("/agents/runs/{run_id}", get(routes::agents::get_run))
+        .route(
+            "/obfuscation/invalidate",
+            post(routes::obfuscation::invalidate_session),
+        )
         .layer(CorsLayer::permissive())
         .with_state(state);
 

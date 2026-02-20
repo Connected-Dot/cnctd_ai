@@ -1,12 +1,12 @@
 # cnctd_ai
 
-A Rust abstraction layer for AI/LLM providers (Anthropic Claude, OpenAI) with integrated MCP (Model Context Protocol) support and autonomous agent framework.
+A Rust abstraction layer for AI/LLM providers (Anthropic Claude, OpenAI, Google Gemini, OpenRouter) with integrated MCP (Model Context Protocol) support and autonomous agent framework.
 
 ## Features
 
-- **Multi-Provider Support**: Unified interface for Anthropic Claude and OpenAI
+- **Multi-Provider Support**: Unified interface for Anthropic Claude, OpenAI, Google Gemini, and OpenRouter
 - **Streaming & Non-Streaming**: Support for both regular completions and streaming responses
-- **Tool Calling**: Full support for function/tool calling with both providers
+- **Tool Calling**: Full support for function/tool calling across all providers
 - **Agent Framework**: Autonomous task execution with tool calling loops
 - **MCP Integration**: Native support for MCP servers (stdio and HTTP gateway)
 - **Error Handling**: Comprehensive error types with provider-specific handling
@@ -203,6 +203,7 @@ Set these for the examples:
 ```bash
 ANTHROPIC_API_KEY=your-anthropic-key
 OPENAI_API_KEY=your-openai-key
+GEMINI_API_KEY=your-gemini-key
 GATEWAY_URL=https://mcp.cnctd.world  # Optional
 GATEWAY_TOKEN=your-token  # Optional
 ```
@@ -277,9 +278,23 @@ match client.complete(request).await {
 }
 ```
 
+## cnctd_ai_server
+
+The repository includes a subcrate at `crates/cnctd_ai_server/` -- an Axum-based REST API that provides:
+
+- **Streaming SSE chat** with full tool-calling loops
+- **MCP integration** for tool discovery and execution
+- **4-point data obfuscation** protecting sensitive entity data during AI conversations
+- **Agent execution** with background task management
+
+The obfuscation system is fully dynamic -- the server fetches its entity dictionary from an HTTP source URL hosted by your application. No entity types are hardcoded.
+
+See the [Obfuscation Setup Guide](crates/cnctd_ai_server/docs/OBFUSCATION_SETUP.md) for integration details.
+
 ## Documentation
 
 - [Agent Framework Guide](docs/AGENT_FRAMEWORK.md) - Complete agent framework documentation
+- [Obfuscation Setup Guide](crates/cnctd_ai_server/docs/OBFUSCATION_SETUP.md) - Integration guide for cnctd_ai_server obfuscation
 - [API Documentation](https://docs.rs/cnctd_ai) - Full API reference (coming soon)
 
 ## License

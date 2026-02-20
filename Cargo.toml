@@ -1,12 +1,12 @@
 [package]
 name = "cnctd_ai"
-version = "0.1.22"
+version = "0.1.23"
 edition = "2024"
 authors = ["Connected Dot Inc.", "Kyle Ebner <kyle@cnctd.world>"]
-description = "AI and LLM utilities"
-repository = "https://github.com/Connected-Dot/cnctd_server"
+description = "Multi-provider AI/LLM abstraction layer with MCP support (Anthropic, OpenAI, Gemini, OpenRouter)"
+repository = "https://github.com/Connected-Dot/cnctd_ai"
 license = "MIT"
-keywords = ["module"]
+keywords = ["ai", "llm", "anthropic", "openai", "mcp"]
 exclude = ["*.png", "*.mp4", "*.mp3", "*.wav", ".claude/"]
 
 [features]

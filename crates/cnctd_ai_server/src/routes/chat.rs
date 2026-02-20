@@ -25,12 +25,10 @@ struct StreamingDeobfuscator {
 }
 
 impl StreamingDeobfuscator {
-    fn new() -> Self {
-        // Longest entity type prefix is "advertiser" (10) + "_" + suffix_length hex chars.
-        // suffix_length=4 -> 15 chars. Add margin for longer suffixes.
+    fn new(max_token_len: usize) -> Self {
         Self {
             buffer: String::new(),
-            max_token_len: 24,
+            max_token_len,
         }
     }
 
@@ -393,7 +391,11 @@ pub async fn chat_stream(
         let mut final_model = String::new();
         let mut final_finish_reason = String::new();
         let mut final_tool_uses: Vec<serde_json::Value> = Vec::new();
-        let mut deobfuscate_buffer = StreamingDeobfuscator::new();
+        let max_token_len = obfuscator
+            .as_ref()
+            .map(|o| o.max_token_length())
+            .unwrap_or(24);
+        let mut deobfuscate_buffer = StreamingDeobfuscator::new(max_token_len);
 
         // Emit token_map event if obfuscation is active
         if let Some(ref obf) = obfuscator {

@@ -141,14 +141,28 @@ cnctd_ai/
 │   ├── agent/              # Agent framework
 │   └── error.rs            # Error types
 ├── crates/
-│   └── cnctd_ai_server/    # AI orchestration server (from llm-service)
+│   └── cnctd_ai_server/    # AI orchestration server
 │       ├── Cargo.toml
+│       ├── docs/
+│       │   └── OBFUSCATION_SETUP.md  # Integration guide for calling apps
 │       └── src/
 │           ├── main.rs
 │           ├── config.rs
 │           ├── state.rs
-│           ├── routes/     # HTTP endpoints (chat, agents, models)
-│           └── obfuscation/ # 4-point interception layer
+│           ├── error.rs
+│           ├── routes/
+│           │   ├── chat.rs          # SSE streaming chat with tool loops
+│           │   ├── agents.rs        # Agent execution endpoints
+│           │   ├── models.rs        # Model listing
+│           │   ├── health.rs        # Health check
+│           │   └── obfuscation.rs   # Cache invalidation endpoint
+│           └── obfuscation/
+│               ├── source.rs        # HTTP source types + fetch
+│               ├── entity_dictionary.rs  # String-keyed entity lookup
+│               ├── tokenizer.rs     # HMAC tokenization + Aho-Corasick
+│               ├── obfuscator.rs    # KeyInferenceEngine + Obfuscator
+│               ├── numeric_scaler.rs # Per-metric scaling
+│               └── session.rs       # Per-salt session cache
 ├── examples/               # Usage examples
 ├── docs/                   # Session summaries, post-mortems, design docs
 │   ├── SESSION_*.md        # Auto-generated session summaries
@@ -164,14 +178,45 @@ cnctd_ai/
 
 ### Subcrate: cnctd_ai_server
 
-The `crates/cnctd_ai_server/` crate is an Axum-based REST API absorbed from the standalone `llm-service` repo. It provides:
+The `crates/cnctd_ai_server/` crate is an Axum-based REST API. It provides:
 
 - **Streaming SSE chat** with full tool-calling loops
 - **MCP integration** for tool discovery and execution
-- **4-point obfuscation layer** (user->LLM, LLM->tool, tool->LLM, LLM->user)
+- **4-point data obfuscation** (user->LLM, LLM->tool, tool->LLM, LLM->user)
 - **Agent execution** with background task management
+- **Cache invalidation endpoint** for obfuscation session management
 
-**IP Note**: The obfuscation system contains client-specific logic (Transmit Live work product). The cnctd_ai library itself is Connected Dot Inc. open-source code.
+#### Obfuscation System
+
+The obfuscation layer protects sensitive entity data during AI conversations. It is **fully dynamic** -- the server fetches its entity dictionary from an HTTP source URL hosted by the calling application. No entity types, IDs, or names are hardcoded.
+
+**Configuration** (env vars on cnctd_ai_server):
+- `OBFUSCATION_KEY` -- HMAC secret for deterministic tokenization
+- `OBFUSCATION_SOURCE_URL` -- URL of the calling app's entity endpoint
+- `OBFUSCATION_SOURCE_TOKEN` -- Bearer token for auth to the source URL
+
+Obfuscation is enabled when all three vars are set. Otherwise, pass-through mode.
+
+**How it works**:
+1. Calling app hosts a `GET` endpoint returning `{ entities, key_inference_overrides?, numeric_rules? }`
+2. Entities are `{ type: String, id: i32, name: String }` -- type names are arbitrary (e.g., "channel", "bidder", "advertiser")
+3. The server auto-derives key inference patterns from type names (e.g., type "channel" -> patterns `channel_id`, `channelid`, `channelids`, `channel_ids`)
+4. HMAC tokens like `channel_a1b2` replace real names/IDs before reaching the LLM
+5. Numeric values are scaled per configurable rules (preserving relative ordering)
+6. Client SSE stream receives `token_map` and `obfuscation_event` events for transparency
+
+**Key files**:
+- `obfuscation/source.rs` -- HTTP source types and fetch function
+- `obfuscation/entity_dictionary.rs` -- String-keyed entity lookup
+- `obfuscation/tokenizer.rs` -- HMAC-SHA256 tokenization with Aho-Corasick matching
+- `obfuscation/obfuscator.rs` -- `KeyInferenceEngine` + 4-point `Obfuscator`
+- `obfuscation/numeric_scaler.rs` -- Per-metric scaling with dynamic or default rules
+- `obfuscation/session.rs` -- Per-salt session cache with HTTP fetch
+- `routes/obfuscation.rs` -- `POST /obfuscation/invalidate` endpoint
+
+See `crates/cnctd_ai_server/docs/OBFUSCATION_SETUP.md` for the full integration guide.
+
+**Note**: The obfuscation system is designed for any application that needs to protect sensitive entity data during AI conversations.
 
 ## Common Patterns
 
@@ -323,11 +368,18 @@ If something went wrong, run the post-mortem-writer agent:
 - Produces a structured incident report with fix plan
 - Written to `docs/POST_MORTEM_*.md`
 
-### Working on Behalf of Clients
-When working on `cnctd_ai_server` for Transmit Live / inventory-manager:
-- Note the client context in session summaries
-- Keep IP boundaries clear: cnctd_ai = Connected Dot, obfuscation = Transmit Live
-- Start Claude Code sessions in **this workspace** (cnctd_ai), not inventory-manager
+## cnctd_ai_server Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ANTHROPIC_API_KEY` | Yes (if using Anthropic) | Anthropic API key |
+| `MCP_GATEWAY_URL` | No | MCP gateway URL for tool execution |
+| `MCP_GATEWAY_TOKEN` | No | Auth token for MCP gateway |
+| `OBFUSCATION_KEY` | No* | HMAC secret for entity tokenization |
+| `OBFUSCATION_SOURCE_URL` | No* | URL to fetch entity dictionary |
+| `OBFUSCATION_SOURCE_TOKEN` | No* | Bearer token for source URL and invalidation endpoint |
+
+*All three `OBFUSCATION_*` vars must be set to enable obfuscation. If any are missing, obfuscation is disabled.
 
 ## Development
 
@@ -340,6 +392,9 @@ cargo run --example basic_completion
 
 # Check types (both crates)
 cargo check -p cnctd_ai -p cnctd_ai_server
+
+# Run cnctd_ai_server
+cd crates/cnctd_ai_server && cargo run
 ```
 
 ## Related Documentation
@@ -349,6 +404,7 @@ cargo check -p cnctd_ai -p cnctd_ai_server
 - `MIGRATION.md` - Migration guide between versions
 - `MULTI_PROVIDER_TOOL_PROGRESS.md` - Tool compatibility tracking
 - `docs/AGENT_FRAMEWORK.md` - Agent framework details
+- `crates/cnctd_ai_server/docs/OBFUSCATION_SETUP.md` - Obfuscation integration guide for calling apps
 
 ## Parent Project
 

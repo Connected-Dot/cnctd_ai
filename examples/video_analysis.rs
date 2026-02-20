@@ -20,12 +20,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None,
     )?;
 
-    // Test with local video file (47MB - will use Files API upload)
+    // Test with local video file (will use Files API upload for large files)
     println!("=== Analyzing Local Video File (via Files API) ===\n");
-    println!("Uploading 47MB video file...\n");
+
+    let video_path = std::env::var("VIDEO_PATH")
+        .expect("VIDEO_PATH environment variable must be set to a local video file");
 
     let request = VideoAnalysisRequest::new(
-        "/Users/kyleebner/Library/CloudStorage/GoogleDrive-snugglebmusic@gmail.com/My Drive/colin and kyle/Colin and Kyle- Jobless in Jersey City -- Ep1.mp4",
+        &video_path,
         "Describe what happens in this video. Who are the people and what are they talking about?"
     );
 

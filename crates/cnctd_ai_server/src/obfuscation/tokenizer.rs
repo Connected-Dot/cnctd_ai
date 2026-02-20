@@ -4,7 +4,7 @@ use regex::Regex;
 use sha2::Sha256;
 use std::collections::{HashMap, HashSet};
 
-use super::entity_dictionary::{EntityDictionary, EntityType};
+use super::entity_dictionary::EntityDictionary;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -13,9 +13,9 @@ pub struct HmacTokenizer {
     salt: String,
     suffix_length: usize,
     /// (entity_type, id) -> token
-    id_to_token: HashMap<(EntityType, i32), String>,
+    id_to_token: HashMap<(String, i32), String>,
     /// token -> (entity_type, id)
-    token_to_id: HashMap<String, (EntityType, i32)>,
+    token_to_id: HashMap<String, (String, i32)>,
     /// lowercase name -> token (first match wins for ambiguous names)
     name_to_token: HashMap<String, String>,
     used_tokens: HashSet<String>,
@@ -30,10 +30,10 @@ pub struct HmacTokenizer {
 }
 
 impl HmacTokenizer {
-    pub fn new(key: &str, salt: &str, suffix_length: usize) -> Self {
-        let type_alternation = EntityType::all()
+    pub fn new(key: &str, salt: &str, suffix_length: usize, entity_type_names: &[String]) -> Self {
+        let type_alternation = entity_type_names
             .iter()
-            .map(|t| t.as_str())
+            .map(|t| regex::escape(t))
             .collect::<Vec<_>>()
             .join("|");
         let pattern = format!(r"\b({})_[0-9a-f]{{{},}}\b", type_alternation, suffix_length);
@@ -55,7 +55,6 @@ impl HmacTokenizer {
     }
 
     /// Build all token mappings from the entity dictionary.
-    /// Must match the TypeScript token-mapper.ts algorithm exactly.
     pub fn build(&mut self, dictionary: &EntityDictionary) {
         self.id_to_token.clear();
         self.token_to_id.clear();
@@ -63,11 +62,11 @@ impl HmacTokenizer {
         self.used_tokens.clear();
 
         for record in dictionary.all_records() {
-            let token = self.generate_unique_token(record.entity_type, record.id);
+            let token = self.generate_unique_token(&record.entity_type, record.id);
             self.id_to_token
-                .insert((record.entity_type, record.id), token.clone());
+                .insert((record.entity_type.clone(), record.id), token.clone());
             self.token_to_id
-                .insert(token.clone(), (record.entity_type, record.id));
+                .insert(token.clone(), (record.entity_type.clone(), record.id));
 
             // Map name -> token (first record wins for duplicate names)
             let lower_name = record.name.to_lowercase();
@@ -116,9 +115,8 @@ impl HmacTokenizer {
         self.ac_pattern_lengths = pattern_lengths;
     }
 
-    fn generate_unique_token(&mut self, entity_type: EntityType, id: i32) -> String {
-        let type_str = entity_type.as_str();
-        let base_input = format!("{}:{}", type_str, id);
+    fn generate_unique_token(&mut self, entity_type: &str, id: i32) -> String {
+        let base_input = format!("{}:{}", entity_type, id);
 
         for attempt in 0..100 {
             let input = if attempt == 0 {
@@ -134,7 +132,7 @@ impl HmacTokenizer {
             let result = mac.finalize().into_bytes();
             let hex_str = hex::encode(result);
             let suffix = &hex_str[..self.suffix_length];
-            let token = format!("{}_{}", type_str, suffix);
+            let token = format!("{}_{}", entity_type, suffix);
 
             if !self.used_tokens.contains(&token) {
                 self.used_tokens.insert(token.clone());
@@ -148,17 +146,19 @@ impl HmacTokenizer {
             HmacSha256::new_from_slice(hmac_key.as_bytes()).expect("HMAC accepts any key size");
         mac.update(base_input.as_bytes());
         let result = mac.finalize().into_bytes();
-        let token = format!("{}_{}", entity_type.as_str(), hex::encode(result));
+        let token = format!("{}_{}", entity_type, hex::encode(result));
         self.used_tokens.insert(token.clone());
         token
     }
 
-    pub fn obfuscate_id(&self, entity_type: EntityType, id: i32) -> Option<&str> {
-        self.id_to_token.get(&(entity_type, id)).map(|s| s.as_str())
+    pub fn obfuscate_id(&self, entity_type: &str, id: i32) -> Option<&str> {
+        self.id_to_token
+            .get(&(entity_type.to_string(), id))
+            .map(|s| s.as_str())
     }
 
-    pub fn deobfuscate_token(&self, token: &str) -> Option<(EntityType, i32)> {
-        self.token_to_id.get(token).copied()
+    pub fn deobfuscate_token(&self, token: &str) -> Option<(String, i32)> {
+        self.token_to_id.get(token).cloned()
     }
 
     pub fn obfuscate_name(&self, name: &str) -> Option<&str> {
@@ -175,7 +175,7 @@ impl HmacTokenizer {
     ) -> Option<String> {
         let (entity_type, id) = self.deobfuscate_token(token)?;
         dictionary
-            .lookup_by_id(entity_type, id)
+            .lookup_by_id(&entity_type, id)
             .map(|r| r.name.clone())
     }
 
@@ -204,10 +204,10 @@ impl HmacTokenizer {
             .iter()
             .map(|((entity_type, id), token)| {
                 let name = dictionary
-                    .lookup_by_id(*entity_type, *id)
+                    .lookup_by_id(entity_type, *id)
                     .map(|r| r.name.clone())
                     .unwrap_or_default();
-                (entity_type.as_str().to_string(), *id, name, token.clone())
+                (entity_type.clone(), *id, name, token.clone())
             })
             .collect()
     }
@@ -254,5 +254,13 @@ impl HmacTokenizer {
 
         result.push_str(&text[last_end..]);
         result
+    }
+
+    /// Compute the maximum possible token length for this tokenizer.
+    /// Used by StreamingDeobfuscator to know how much to buffer.
+    pub fn max_token_length(&self, entity_type_names: &[String]) -> usize {
+        let longest_type = entity_type_names.iter().map(|t| t.len()).max().unwrap_or(0);
+        // token format: {type}_{hex_suffix}
+        longest_type + 1 + self.suffix_length
     }
 }

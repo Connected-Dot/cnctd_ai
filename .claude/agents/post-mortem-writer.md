@@ -50,7 +50,7 @@ Beyond reading the transcript, also gather current state:
 
 - **Crate structure**: Root `cnctd_ai` library + subcrates in `crates/`
 - **Parent monorepo**: Part of `cnctd/modules/rust/cnctd_ai/` (git submodule)
-- **IP boundary**: cnctd_ai = Connected Dot (open source), cnctd_ai_server obfuscation = Transmit Live work product
+- **Subcrates**: `cnctd_ai_server` provides obfuscation and orchestration features
 - **Critical files**: `src/lib.rs`, `src/client.rs`, `Cargo.toml`, provider implementations
 
 ## Output Format
@@ -192,6 +192,17 @@ The calling agent will:
 - Distinguish between authorized and unauthorized actions clearly
 - Note any data loss or irreversible damage
 - Recommend preventive measures for future sessions
+
+## Public Repo Safety
+
+**This is a public open-source repository.** Post-mortems are committed to `docs/` and visible to anyone. Follow these rules strictly:
+
+- **NO client names** -- never mention specific companies, clients, or partners by name
+- **NO proprietary details** -- no internal project names, codenames, or references to private repos
+- **NO personal data** -- no real names (other than the repo owner), emails, IPs, credentials, or API keys
+- **NO internal URLs** -- no staging servers, internal dashboards, or private endpoints
+- **Generic descriptions only** -- describe WHAT broke (e.g., "obfuscation pipeline", "tokenizer") not WHO it affects
+- If the incident involved client-specific work, describe the technical failure without identifying the client
 
 ## Principles
 

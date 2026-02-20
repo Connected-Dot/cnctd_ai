@@ -38,7 +38,7 @@ impl AppState {
             .as_ref()
             .map(|url| McpGateway::new(url));
 
-        let mcp_client = if let Some(url) = &config.transmit_mcp_url {
+        let mcp_client = if let Some(url) = &config.mcp_server_url {
             let max_retries = 5;
             let mut attempt = 0;
             loop {
@@ -66,18 +66,26 @@ impl AppState {
             None
         };
 
-        let session_cache =
-            if let (Some(key), Some(pg)) = (&config.safe_proxy_key, &config.pg_connection_string) {
-                tracing::info!("Obfuscation enabled (SAFE_PROXY_KEY + PG_CONNECTION_STRING set)");
-                Some(Arc::new(SessionCache::new(
-                    key.clone(),
-                    pg.clone(),
-                    Duration::from_secs(3600),
-                )))
-            } else {
-                tracing::info!("Obfuscation disabled (SAFE_PROXY_KEY or PG_CONNECTION_STRING not set)");
-                None
-            };
+        let session_cache = if let (Some(key), Some(url), Some(token)) = (
+            &config.obfuscation_key,
+            &config.obfuscation_source_url,
+            &config.obfuscation_source_token,
+        ) {
+            tracing::info!(
+                "Obfuscation enabled (OBFUSCATION_KEY + OBFUSCATION_SOURCE_URL set)"
+            );
+            Some(Arc::new(SessionCache::new(
+                key.clone(),
+                url.clone(),
+                token.clone(),
+                Duration::from_secs(3600),
+            )))
+        } else {
+            tracing::info!(
+                "Obfuscation disabled (OBFUSCATION_KEY, OBFUSCATION_SOURCE_URL, or OBFUSCATION_SOURCE_TOKEN not set)"
+            );
+            None
+        };
 
         Self {
             config,

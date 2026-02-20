@@ -6,13 +6,13 @@
 
 ## TL;DR
 
-Absorbed the standalone `llm-service` repository into cnctd_ai as a new subcrate `crates/cnctd_ai_server/`, resolving Cargo nested workspace limitations. Also established session summary infrastructure including custom agents, hooks, skills, and settings for persistent development context.
+Absorbed a standalone AI orchestration server into cnctd_ai as a new subcrate `crates/cnctd_ai_server/`, resolving Cargo nested workspace limitations. Also established session summary infrastructure including custom agents, hooks, skills, and settings for persistent development context.
 
 ## Summary
 
-This session addressed two major objectives for the cnctd_ai project. The first phase focused on absorbing the standalone `llm-service` Rust project (a Transmit Live work product) into the cnctd_ai repository as a subcrate called `cnctd_ai_server`. This required careful architectural planning due to Cargo's limitation that nested workspaces cannot exist when the outer workspace already includes inner crates. The solution was to keep cnctd_ai as a `[package]` at the root level with subcrates housed under `crates/`, and register both `modules/rust/cnctd_ai` and `modules/rust/cnctd_ai/crates/*` in the parent cnctd monorepo's workspace.
+This session addressed two major objectives for the cnctd_ai project. The first phase focused on absorbing a standalone AI orchestration server into the cnctd_ai repository as a subcrate called `cnctd_ai_server`. This required careful architectural planning due to Cargo's limitation that nested workspaces cannot exist when the outer workspace already includes inner crates. The solution was to keep cnctd_ai as a `[package]` at the root level with subcrates housed under `crates/`, and register both `modules/rust/cnctd_ai` and `modules/rust/cnctd_ai/crates/*` in the parent cnctd monorepo's workspace.
 
-The llm-service codebase contained a 4-point obfuscation system (user-to-LLM, LLM-to-tool, tool-to-LLM, LLM-to-user interception) with HMAC tokenization, Aho-Corasick name matching, numeric scaling, and a Postgres-backed entity dictionary. All 15 source files were migrated with proper dependency paths updated to reference cnctd_ai via `path = "../.."`.
+The server codebase contained a 4-point obfuscation system (user-to-LLM, LLM-to-tool, tool-to-LLM, LLM-to-user interception) with HMAC tokenization, Aho-Corasick name matching, numeric scaling, and a Postgres-backed entity dictionary. All 15 source files were migrated with proper dependency paths updated to reference cnctd_ai via `path = "../.."`.
 
 The second phase established session summary infrastructure modeled after patterns from cnctd.world's hooks and skills system. This included two agent definitions (session-summary-writer and post-mortem-writer), shell hooks for session start/end, a skill orchestration workflow, local settings with permissions, and updates to the project's CLAUDE.md documentation.
 
@@ -21,7 +21,7 @@ The second phase established session summary infrastructure modeled after patter
 ### Phase 1: cnctd_ai_server Subcrate
 
 - Created `crates/cnctd_ai_server/` directory with full project structure
-- Migrated 15 source files from llm-service:
+- Migrated 15 source files:
   - `Cargo.toml` - Package definition with cnctd_ai path dependency
   - `src/config.rs` - Server configuration
   - `src/error.rs` - Error types
@@ -93,8 +93,8 @@ The key architectural decision was how to handle the nested workspace problem. C
 
 This preserves the ability to `cargo build` from the monorepo root while keeping related code co-located.
 
-### IP Protection Boundary
-The obfuscation system in cnctd_ai_server is a Transmit Live work product, distinct from the Connected Dot open-source platform code in cnctd_ai core. This boundary is important for licensing and IP attribution.
+### Obfuscation System
+The obfuscation system in cnctd_ai_server is designed to be fully agnostic -- it dynamically fetches entity dictionaries from an HTTP source URL hosted by the calling application.
 
 ### Obfuscation Architecture
 The 4-point interception system provides data protection at every stage of the LLM conversation:
@@ -110,4 +110,4 @@ Components use HMAC-SHA256 for deterministic tokenization (same input always pro
 - [ ] Add integration tests for the obfuscation pipeline
 - [ ] Wire up the session-summary-writer agent as a post-session automation (current limitation: custom agent types not available as subagent invocations from Claude Code)
 - [ ] Consider publishing cnctd_ai_server to the private cargo registry
-- [ ] Investigate whether inventory-manager (Node/TypeScript) needs any interface updates for the new crate structure
+- [ ] Investigate whether calling applications need any interface updates for the new crate structure

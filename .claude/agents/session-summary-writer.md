@@ -46,10 +46,7 @@ This is the **cnctd_ai** Rust library - a multi-provider AI abstraction layer. K
 - **Providers**: Anthropic Claude, OpenAI, Google Gemini, OpenRouter
 - **Key features**: Streaming, tool calling, MCP integration, agent framework
 - **Parent monorepo**: Part of `cnctd/modules/rust/cnctd_ai/` (git submodule)
-- **Related work**: `cnctd_ai_server` (absorbed from llm-service) has Transmit Live-specific code
-- **IP boundary**: cnctd_ai = Connected Dot (open source), cnctd_ai_server obfuscation = Transmit Live work product
-
-Sessions may involve work on behalf of different clients/projects. Note which context applies.
+- **Related work**: `cnctd_ai_server` subcrate provides obfuscation and orchestration features
 
 ## Output Format
 
@@ -69,7 +66,7 @@ Write the summary to `docs/SESSION_YYYY_MM_DD_NN_<TOPIC>.md` where:
 # Session: <Descriptive Title>
 **Date:** YYYY-MM-DD
 **Branch:** <branch-name if applicable>
-**Context:** <cnctd_ai core | cnctd_ai_server | transmit-live integration | etc.>
+**Context:** <cnctd_ai core | cnctd_ai_server | etc.>
 
 ## TL;DR
 <2-3 sentence summary of the most important accomplishments>
@@ -152,4 +149,14 @@ The calling agent will:
 - Include context - explain WHY, not just WHAT
 - Note any workarounds or technical debt introduced
 - Highlight any patterns that should be followed (or avoided) in future work
-- Clearly indicate which client/project context the work was done under
+
+## Public Repo Safety
+
+**This is a public open-source repository.** Session summaries are committed to `docs/` and visible to anyone. Follow these rules strictly:
+
+- **NO client names** -- never mention specific companies, clients, or partners by name
+- **NO proprietary details** -- no internal project names, codenames, or references to private repos
+- **NO personal data** -- no real names (other than the repo owner), emails, IPs, credentials, or API keys
+- **NO internal URLs** -- no staging servers, internal dashboards, or private endpoints
+- **Generic descriptions only** -- describe WHAT was built (e.g., "obfuscation system", "entity dictionary") not WHO it was built for
+- If work was done on behalf of a client, describe the technical outcomes without identifying the client

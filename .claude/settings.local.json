@@ -10,7 +10,10 @@
       "Write(*/docs/SESSION_*.md)",
       "Write(*/docs/POST_MORTEM_*.md)",
       "Task(session-summary-writer)",
-      "Task(post-mortem-writer)"
+      "Task(post-mortem-writer)",
+      "Bash(gh repo list:*)",
+      "Bash(gh auth:*)",
+      "Bash(done)"
     ]
   },
   "hooks": {
