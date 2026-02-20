@@ -8,7 +8,7 @@
 //! 5. Download results from output file
 
 use async_openai::config::OpenAIConfig;
-use async_openai::types::{
+use async_openai::types::batches::{
     Batch as OpenAiBatch,
     BatchCompletionWindow,
     BatchEndpoint,
@@ -17,13 +17,13 @@ use async_openai::types::{
     BatchRequestInputMethod,
     BatchRequestOutput,
     BatchStatus as OpenAiBatchStatus,
+};
+use async_openai::types::files::{
     CreateFileRequest,
     FileInput,
     FilePurpose,
-    InputSource,
 };
-use serde::Serialize;
-
+use async_openai::types::InputSource;
 use super::types::{
     BatchCounts,
     BatchInfo,
@@ -36,15 +36,6 @@ use super::types::{
 use crate::client::config::OpenAiConfig;
 use crate::error::{Error, Result};
 use crate::message::Role;
-
-/// Query parameters for listing batches
-#[derive(Debug, Serialize, Default)]
-struct ListBatchesQuery {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    limit: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    after: Option<String>,
-}
 
 /// Create a batch of completion requests.
 ///
@@ -88,6 +79,7 @@ pub async fn create_batch(
             endpoint: BatchEndpoint::V1ChatCompletions,
             completion_window: BatchCompletionWindow::W24H,
             metadata: None,
+            output_expires_after: None,
         })
         .await
         .map_err(Error::OpenAiError)?;
@@ -126,16 +118,11 @@ pub async fn cancel_batch(
 /// List batches.
 pub async fn list_batches(
     sdk_client: &async_openai::Client<OpenAIConfig>,
-    limit: Option<u32>,
+    _limit: Option<u32>,
 ) -> Result<Vec<BatchInfo>> {
-    let query = ListBatchesQuery {
-        limit,
-        after: None,
-    };
-
     let response = sdk_client
         .batches()
-        .list(&query)
+        .list()
         .await
         .map_err(Error::OpenAiError)?;
 

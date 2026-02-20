@@ -1,4 +1,4 @@
-use async_openai::types::{CreateEmbeddingRequestArgs, EmbeddingInput as OpenAiEmbeddingInput};
+use async_openai::types::embeddings::{CreateEmbeddingRequestArgs, EmbeddingInput as OpenAiEmbeddingInput};
 use crate::error::Result;
 use crate::client::config::OpenAiConfig;
 use super::{EmbeddingRequest, EmbeddingResponse, Embedding, EmbeddingUsage, EmbeddingInput};

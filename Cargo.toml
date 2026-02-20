@@ -14,31 +14,31 @@ default = []
 tracing = ["dep:tracing"]
 
 [dependencies]
-anyhow = "1.0"
-tokio = { version = "1.48.0", features = ["full"] }
+anyhow = "1.0.102"
+tokio = { version = "1.49.0", features = ["full"] }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
-thiserror = "2.0.17"
+serde_json = "1.0.149"
+thiserror = "2.0.18"
 rmcp = { version = "0.16.0", features = [
     "client",
     "transport-streamable-http-client",
     "transport-streamable-http-client-reqwest",
     "transport-child-process"
 ] }
-reqwest = "0.12.24"
-async-openai = "0.30.1"
+reqwest = "0.12.28"
+async-openai = { version = "0.33.0", features = ["full"] }
 dotenvy = "0.15.7"
 anthropic-sdk-rust = "0.1.1"
-futures = "0.3.31"
+futures = "0.3.32"
 eventsource-stream = "0.2.3"
-bytes = "1.11.0"
-chrono = "0.4"
-uuid = { version = "1.11", features = ["v4"] }
+bytes = "1.11.1"
+chrono = "0.4.43"
+uuid = { version = "1.21.0", features = ["v4"] }
 base64 = "0.22"
-tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.28.0", features = ["native-tls"] }
 url = "2.5"
 tracing = { version = "0.1", optional = true }
 
 [dev-dependencies]
-tokio = { version = "1.48.0", features = ["full"] }
-anyhow = "1.0.100"
+tokio = { version = "1.49.0", features = ["full"] }
+anyhow = "1.0.102"

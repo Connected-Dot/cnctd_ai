@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt as _;
 use std::collections::HashMap;
 
 use super::source::NumericRule;
@@ -55,14 +55,14 @@ impl NumericScaler {
     }
 
     fn build_factors<'a>(configs: impl Iterator<Item = (&'a str, f64, f64)>) -> Self {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut factors = HashMap::new();
 
         for (metric, min, max) in configs {
             let factor = if (max - min).abs() < f64::EPSILON {
                 min
             } else {
-                rng.gen_range(min..=max)
+                rng.random_range(min..=max)
             };
             factors.insert(metric.to_string(), factor);
         }

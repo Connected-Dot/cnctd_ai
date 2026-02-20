@@ -13,7 +13,14 @@
       "Task(post-mortem-writer)",
       "Bash(gh repo list:*)",
       "Bash(gh auth:*)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(rustc:*)",
+      "Bash(rustup show:*)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(grep:*)"
     ]
   },
   "hooks": {

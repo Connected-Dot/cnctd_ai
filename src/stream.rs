@@ -92,7 +92,7 @@ impl CompletionStream {
     }
 
     pub fn openai(
-        stream: async_openai::types::ChatCompletionResponseStream,
+        stream: async_openai::types::chat::ChatCompletionResponseStream,
         model: String,
     ) -> Self {
         Self {
@@ -255,11 +255,11 @@ impl CompletionStream {
                                 
                                 if let Some(finish_reason) = &choice.finish_reason {
                                     self.finish_reason = Some(match finish_reason {
-                                        async_openai::types::FinishReason::Stop => crate::response::FinishReason::Stop,
-                                        async_openai::types::FinishReason::Length => crate::response::FinishReason::Length,
-                                        async_openai::types::FinishReason::ContentFilter => crate::response::FinishReason::ContentFilter,
-                                        async_openai::types::FinishReason::ToolCalls => crate::response::FinishReason::ToolUse,
-                                        async_openai::types::FinishReason::FunctionCall => crate::response::FinishReason::ToolUse,
+                                        async_openai::types::chat::FinishReason::Stop => crate::response::FinishReason::Stop,
+                                        async_openai::types::chat::FinishReason::Length => crate::response::FinishReason::Length,
+                                        async_openai::types::chat::FinishReason::ContentFilter => crate::response::FinishReason::ContentFilter,
+                                        async_openai::types::chat::FinishReason::ToolCalls => crate::response::FinishReason::ToolUse,
+                                        async_openai::types::chat::FinishReason::FunctionCall => crate::response::FinishReason::ToolUse,
                                     });
                                 }
                             }
@@ -337,30 +337,31 @@ impl CompletionStream {
     /// Handle OpenAI Responses API stream events
     fn handle_openai_responses_event(
         &mut self,
-        event: async_openai::types::responses::ResponseEvent,
+        event: async_openai::types::responses::ResponseStreamEvent,
     ) -> Option<StreamChunk> {
-        use async_openai::types::responses::ResponseEvent;
+        use async_openai::types::responses::ResponseStreamEvent;
         
         match event {
-            ResponseEvent::ResponseCreated(_) => None,
-            ResponseEvent::ResponseInProgress(_) => None,
-            ResponseEvent::ResponseOutputItemAdded(e) => {
+            ResponseStreamEvent::ResponseCreated(_) => None,
+            ResponseStreamEvent::ResponseInProgress(_) => None,
+            ResponseStreamEvent::ResponseOutputItemAdded(e) => {
                 // Capture function name for later use in Unknown event parsing
                 if let async_openai::types::responses::OutputItem::FunctionCall(fc) = &e.item {
-                    self.pending_function_names.insert(fc.id.clone(), fc.name.clone());
-                    self.pending_call_ids.insert(fc.id.clone(), fc.call_id.clone());
+                    let id = fc.id.clone().unwrap_or_default();
+                    self.pending_function_names.insert(id.clone(), fc.name.clone());
+                    self.pending_call_ids.insert(id.clone(), fc.call_id.clone());
                     return Some(StreamChunk {
                         delta: None,
                         finish_reason: None,
                         tool_use_event: Some(ToolUseEvent::Start {
-                            id: fc.id.clone(),
+                            id,
                             name: fc.name.clone(),
                         }),
                     });
                 }
                 None
             }
-            ResponseEvent::ResponseOutputTextDelta(e) => {
+            ResponseStreamEvent::ResponseOutputTextDelta(e) => {
                 self.accumulated_text.push_str(&e.delta);
                 Some(StreamChunk {
                     delta: Some(e.delta),
@@ -368,7 +369,7 @@ impl CompletionStream {
                     tool_use_event: None,
                 })
             }
-            ResponseEvent::ResponseOutputTextDone(e) => {
+            ResponseStreamEvent::ResponseOutputTextDone(e) => {
                 // If we haven't accumulated any text via deltas, use the full text from done event
                 if self.accumulated_text.is_empty() && !e.text.is_empty() {
                     self.accumulated_text.push_str(&e.text);
@@ -381,12 +382,12 @@ impl CompletionStream {
                 None
             }
             // Handle ContentPartAdded - may contain initial text for some models
-            ResponseEvent::ResponseContentPartAdded(e) => {
-                if let Some(text) = &e.part.text {
-                    if !text.is_empty() {
-                        self.accumulated_text.push_str(text);
+            ResponseStreamEvent::ResponseContentPartAdded(e) => {
+                if let async_openai::types::responses::OutputContent::OutputText(text_content) = &e.part {
+                    if !text_content.text.is_empty() {
+                        self.accumulated_text.push_str(&text_content.text);
                         return Some(StreamChunk {
-                            delta: Some(text.clone()),
+                            delta: Some(text_content.text.clone()),
                             finish_reason: None,
                             tool_use_event: None,
                         });
@@ -395,14 +396,14 @@ impl CompletionStream {
                 None
             }
             // Handle ContentPartDone - contains complete text for some models (like GPT-5.2)
-            ResponseEvent::ResponseContentPartDone(e) => {
-                if let Some(text) = &e.part.text {
+            ResponseStreamEvent::ResponseContentPartDone(e) => {
+                if let async_openai::types::responses::OutputContent::OutputText(text_content) = &e.part {
                     // Only add if we haven't already accumulated this text
                     // (some models send both delta and done events)
-                    if !text.is_empty() && self.accumulated_text.is_empty() {
-                        self.accumulated_text.push_str(text);
+                    if !text_content.text.is_empty() && self.accumulated_text.is_empty() {
+                        self.accumulated_text.push_str(&text_content.text);
                         return Some(StreamChunk {
-                            delta: Some(text.clone()),
+                            delta: Some(text_content.text.clone()),
                             finish_reason: None,
                             tool_use_event: None,
                         });
@@ -410,7 +411,7 @@ impl CompletionStream {
                 }
                 None
             }
-            ResponseEvent::ResponseFunctionCallArgumentsDelta(e) => {
+            ResponseStreamEvent::ResponseFunctionCallArgumentsDelta(e) => {
                 // Accumulate function call arguments
                 let item_id = e.item_id.clone();
                 let delta = e.delta.clone();
@@ -425,7 +426,7 @@ impl CompletionStream {
                     }),
                 })
             }
-            ResponseEvent::ResponseFunctionCallArgumentsDone(e) => {
+            ResponseStreamEvent::ResponseFunctionCallArgumentsDone(e) => {
                 // Create tool use from accumulated arguments
                 let args_value: serde_json::Value = serde_json::from_str(&e.arguments)
                     .unwrap_or_else(|_| serde_json::Value::String(e.arguments.clone()));
@@ -434,7 +435,7 @@ impl CompletionStream {
                 let tool_use = crate::tool::ToolUse {
                     id: e.item_id.clone(),
                     call_id,
-                    name: e.name,
+                    name: e.name.unwrap_or_default(),
                     input: args_value,
                 };
                 let event = ToolUseEvent::Complete(tool_use.clone());
@@ -445,7 +446,7 @@ impl CompletionStream {
                     tool_use_event: Some(event),
                 })
             }
-            ResponseEvent::ResponseOutputItemDone(e) => {
+            ResponseStreamEvent::ResponseOutputItemDone(e) => {
                 // Capture reasoning items for continuation requests (GPT-5.2-pro requirement)
                 // Must include encrypted_content for multi-turn stateless conversations
                 if let async_openai::types::responses::OutputItem::Reasoning(ref reasoning) = e.item {
@@ -455,10 +456,14 @@ impl CompletionStream {
                         "type": "reasoning",
                         "id": reasoning.id,
                         "summary": reasoning.summary.iter().map(|s| {
-                            serde_json::json!({
-                                "type": "summary_text",
-                                "text": s.text.clone()
-                            })
+                            match s {
+                                async_openai::types::responses::SummaryPart::SummaryText(content) => {
+                                    serde_json::json!({
+                                        "type": "summary_text",
+                                        "text": content.text.clone()
+                                    })
+                                }
+                            }
                         }).collect::<Vec<_>>()
                     });
                     // Add encrypted_content if present
@@ -473,9 +478,10 @@ impl CompletionStream {
                     let args_value: serde_json::Value = serde_json::from_str(&fc.arguments)
                         .unwrap_or_else(|_| serde_json::Value::String(fc.arguments.clone()));
                     // Only add if not already present (check both ids)
-                    if !self.tool_uses.iter().any(|tu| tu.id == fc.id) {
+                    let fc_id = fc.id.clone().unwrap_or_default();
+                    if !self.tool_uses.iter().any(|tu| tu.id == fc_id) {
                         let tool_use = crate::tool::ToolUse {
-                            id: fc.id,
+                            id: fc_id,
                             call_id: Some(fc.call_id),
                             name: fc.name,
                             input: args_value,
@@ -491,7 +497,7 @@ impl CompletionStream {
                 }
                 None
             }
-            ResponseEvent::ResponseCompleted(e) => {
+            ResponseStreamEvent::ResponseCompleted(e) => {
                 // Set finish reason
                 self.finish_reason = Some(if !self.tool_uses.is_empty() {
                     crate::response::FinishReason::ToolUse
@@ -516,7 +522,7 @@ impl CompletionStream {
                     tool_use_event: None,
                 })
             }
-            ResponseEvent::ResponseFailed(_) => {
+            ResponseStreamEvent::ResponseFailed(_) => {
                 self.finish_reason = Some(crate::response::FinishReason::Other);
                 Some(StreamChunk {
                     delta: None,
@@ -524,7 +530,7 @@ impl CompletionStream {
                     tool_use_event: None,
                 })
             }
-            ResponseEvent::ResponseIncomplete(_) => {
+            ResponseStreamEvent::ResponseIncomplete(_) => {
                 self.finish_reason = Some(crate::response::FinishReason::Length);
                 Some(StreamChunk {
                     delta: None,
@@ -532,7 +538,7 @@ impl CompletionStream {
                     tool_use_event: None,
                 })
             }
-            ResponseEvent::ResponseError(_) => {
+            ResponseStreamEvent::ResponseError(_) => {
                 self.finish_reason = Some(crate::response::FinishReason::Other);
                 Some(StreamChunk {
                     delta: None,
@@ -541,45 +547,12 @@ impl CompletionStream {
                 })
             }
             // Reasoning events - expose reasoning summaries to caller
-            ResponseEvent::ResponseReasoningSummaryTextDelta(e) => {
+            ResponseStreamEvent::ResponseReasoningSummaryTextDelta(e) => {
                 Some(StreamChunk {
                     delta: Some(e.delta),
                     finish_reason: None,
                     tool_use_event: None,
                 })
-            }
-            ResponseEvent::Unknown(val) => {
-                // Try to parse unknown events - async-openai might have version mismatches
-                // Check if this is a function_call_arguments.done that failed to parse
-                // (async-openai expects 'name' field but OpenAI may not send it)
-                if let Some(event_type) = val.get("type").and_then(|v| v.as_str()) {
-                    if event_type == "response.function_call_arguments.done" {
-                        if let (Some(item_id), Some(arguments)) = (
-                            val.get("item_id").and_then(|v| v.as_str()),
-                            val.get("arguments").and_then(|v| v.as_str())
-                        ) {
-                            let args_value: serde_json::Value = serde_json::from_str(arguments)
-                                .unwrap_or_else(|_| serde_json::Value::String(arguments.to_string()));
-
-                            // Look for existing tool use with this item_id and update it
-                            // Or add if not present (name will be from OutputItemAdded event)
-                            if !self.tool_uses.iter().any(|tu| tu.id == item_id) {
-                                // We need the name - check if we stored it from OutputItemAdded
-                                if let Some(name) = self.pending_function_names.get(item_id) {
-                                    // Get the call_id from OutputItemAdded (required for function_call_output)
-                                    let call_id = self.pending_call_ids.get(item_id).cloned();
-                                    self.tool_uses.push(crate::tool::ToolUse {
-                                        id: item_id.to_string(),
-                                        call_id,
-                                        name: name.clone(),
-                                        input: args_value,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-                None
             }
             _ => None
         }
@@ -966,7 +939,7 @@ enum StreamType {
             >
         >
     ),
-    OpenAi(async_openai::types::ChatCompletionResponseStream),
+    OpenAi(async_openai::types::chat::ChatCompletionResponseStream),
     OpenAiResponses(async_openai::types::responses::ResponseStream),
     GeminiCustom(
         std::pin::Pin<

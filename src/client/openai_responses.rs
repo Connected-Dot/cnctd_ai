@@ -10,9 +10,12 @@ use crate::stream::CompletionStream;
 use super::config::OpenAiConfig;
 
 use async_openai::types::responses::{
-    CreateResponseArgs, Input, InputItem, InputMessage, InputContent,
-    Role as ResponsesRole, ToolDefinition, Function,
-    OutputContent, Content,
+    CreateResponseArgs, InputParam, InputItem, EasyInputMessage, EasyInputContent,
+    Role as ResponsesRole, Tool as ResponsesTool, FunctionTool,
+    OutputItem, Item, MessageItem, InputMessage, InputRole, InputContent,
+    InputTextContent, InputImageContent, ImageDetail,
+    FunctionCallOutputItemParam, FunctionCallOutput,
+    FunctionToolCall as ResponsesFunctionToolCall, OutputStatus,
 };
 
 /// Check if a model is a reasoning model that requires encrypted_content for multi-turn
@@ -33,7 +36,7 @@ fn convert_role(role: &crate::message::Role) -> ResponsesRole {
 }
 
 /// Build input items from our messages
-fn build_input(request: &CompletionRequest) -> Input {
+fn build_input(request: &CompletionRequest) -> InputParam {
     let mut items: Vec<InputItem> = Vec::new();
 
     for msg in &request.messages {
@@ -43,116 +46,113 @@ fn build_input(request: &CompletionRequest) -> Input {
                 if let Some(tool_results) = &msg.tool_results {
                     // For tool results, we need to provide function call outputs
                     for result in tool_results {
-                        // Build a function_call_output item
-                        // Use tool_call_id which should now contain the call_id (call_...) format
-                        let output_item = serde_json::json!({
-                            "type": "function_call_output",
-                            "call_id": result.effective_call_id(),
-                            "output": result.content
-                        });
-                        items.push(InputItem::Custom(output_item));
+                        let output_item = FunctionCallOutputItemParam {
+                            call_id: result.effective_call_id().to_string(),
+                            output: FunctionCallOutput::Text(result.content.clone()),
+                            id: None,
+                            status: None,
+                        };
+                        items.push(InputItem::Item(Item::FunctionCallOutput(output_item)));
                     }
                     continue;
                 }
                 // Legacy single tool result
                 else if let Some(tool_call_id) = &msg.tool_call_id {
-                    let output_item = serde_json::json!({
-                        "type": "function_call_output",
-                        "call_id": tool_call_id,
-                        "output": msg.content
-                    });
-                    items.push(InputItem::Custom(output_item));
+                    let output_item = FunctionCallOutputItemParam {
+                        call_id: tool_call_id.clone(),
+                        output: FunctionCallOutput::Text(msg.content.clone()),
+                        id: None,
+                        status: None,
+                    };
+                    items.push(InputItem::Item(Item::FunctionCallOutput(output_item)));
                     continue;
                 }
 
                 // Check if message has images (vision support)
                 if msg.has_images() {
-                    // Build multipart content with images
-                    let mut content_parts = Vec::new();
+                    let mut content_parts: Vec<InputContent> = Vec::new();
 
                     // Add text content if present
                     if !msg.content.is_empty() {
-                        content_parts.push(serde_json::json!({
-                            "type": "input_text",
-                            "text": msg.content
+                        content_parts.push(InputContent::InputText(InputTextContent {
+                            text: msg.content.clone(),
                         }));
                     }
 
                     // Add images as base64 data URLs
                     if let Some(images) = &msg.images {
                         for image in images {
-                            // OpenAI expects data URL format: data:{media_type};base64,{data}
                             let data_url = format!("data:{};base64,{}", image.media_type, image.data);
-                            content_parts.push(serde_json::json!({
-                                "type": "input_image",
-                                "image_url": data_url
+                            content_parts.push(InputContent::InputImage(InputImageContent {
+                                detail: ImageDetail::default(),
+                                file_id: None,
+                                image_url: Some(data_url),
                             }));
                         }
                     }
 
-                    // Use Custom InputItem for multipart messages
-                    let multipart_msg = serde_json::json!({
-                        "type": "message",
-                        "role": match msg.role {
-                            crate::message::Role::System => "system",
-                            crate::message::Role::User => "user",
-                            crate::message::Role::Assistant => "assistant",
-                        },
-                        "content": content_parts
-                    });
-                    items.push(InputItem::Custom(multipart_msg));
+                    let role = match msg.role {
+                        crate::message::Role::System => InputRole::System,
+                        crate::message::Role::User => InputRole::User,
+                        _ => InputRole::User,
+                    };
+                    let input_msg = InputMessage {
+                        content: content_parts,
+                        role,
+                        status: None,
+                    };
+                    items.push(InputItem::Item(Item::Message(MessageItem::Input(input_msg))));
                     continue;
                 }
 
                 // Regular text-only message
-                let input_msg = InputMessage {
-                    kind: Default::default(),
+                let input_msg = EasyInputMessage {
+                    r#type: Default::default(),
                     role: convert_role(&msg.role),
-                    content: InputContent::TextInput(msg.content.clone()),
+                    content: EasyInputContent::Text(msg.content.clone()),
                 };
-                items.push(InputItem::Message(input_msg));
+                items.push(InputItem::EasyMessage(input_msg));
             }
             crate::message::Role::Assistant => {
                 // Include reasoning items FIRST (required for GPT-5.2-pro before function calls)
+                // Reasoning items are stored as serde_json::Value — deserialize into InputItem
                 if let Some(reasoning_items) = &msg.reasoning_items {
                     for reasoning in reasoning_items {
-                        items.push(InputItem::Custom(reasoning.clone()));
+                        if let Ok(input_item) = serde_json::from_value::<InputItem>(reasoning.clone()) {
+                            items.push(input_item);
+                        }
                     }
                 }
 
                 // For assistant messages with tool uses, include the function calls
                 if let Some(tool_uses) = &msg.tool_uses {
                     for tu in tool_uses {
-                        // For OpenAI Responses API:
-                        // - id field must be the fc_... format (tu.id)
-                        // - call_id field should be the call_... format (tu.call_id)
-                        let call_id = tu.call_id.as_ref().unwrap_or(&tu.id);
-                        let func_call = serde_json::json!({
-                            "type": "function_call",
-                            "id": tu.id,
-                            "call_id": call_id,
-                            "name": tu.name,
-                            "arguments": tu.input.to_string(),
-                            "status": "completed"
-                        });
-                        items.push(InputItem::Custom(func_call));
+                        let call_id = tu.call_id.as_ref().unwrap_or(&tu.id).clone();
+                        let func_call = ResponsesFunctionToolCall {
+                            arguments: tu.input.to_string(),
+                            call_id,
+                            name: tu.name.clone(),
+                            id: Some(tu.id.clone()),
+                            status: Some(OutputStatus::Completed),
+                        };
+                        items.push(InputItem::Item(Item::FunctionCall(func_call)));
                     }
                 }
-                
+
                 // Also include text content if present
                 if !msg.content.is_empty() {
-                    let input_msg = InputMessage {
-                        kind: Default::default(),
+                    let input_msg = EasyInputMessage {
+                        r#type: Default::default(),
                         role: ResponsesRole::Assistant,
-                        content: InputContent::TextInput(msg.content.clone()),
+                        content: EasyInputContent::Text(msg.content.clone()),
                     };
-                    items.push(InputItem::Message(input_msg));
+                    items.push(InputItem::EasyMessage(input_msg));
                 }
             }
         }
     }
-    
-    Input::Items(items)
+
+    InputParam::Items(items)
 }
 
 /// Build tools for the Responses API
@@ -185,17 +185,17 @@ fn ensure_properties(schema: &mut serde_json::Map<String, serde_json::Value>) {
     }
 }
 
-fn build_tools(request: &CompletionRequest) -> Option<Vec<ToolDefinition>> {
+fn build_tools(request: &CompletionRequest) -> Option<Vec<ResponsesTool>> {
     request.tools.as_ref().map(|tools| {
         tools.iter().map(|tool| {
             let mut schema = (*tool.input_schema).clone();
             ensure_properties(&mut schema);
-            
-            ToolDefinition::Function(Function {
+
+            ResponsesTool::Function(FunctionTool {
                 name: tool.name.to_string(),
                 description: tool.description.as_ref().map(|d| d.to_string()),
-                parameters: serde_json::Value::Object(schema),
-                strict: false,
+                parameters: Some(serde_json::Value::Object(schema)),
+                strict: Some(false),
             })
         }).collect()
     })
@@ -218,7 +218,7 @@ pub(super) async fn complete(
     // Include encrypted reasoning content for multi-turn tool calls with reasoning models (GPT-5.2-pro, o1, o3)
     // This is required for stateless multi-turn conversations - only for reasoning models
     if is_reasoning_model(&config.model) {
-        builder.include(vec!["reasoning.encrypted_content".to_string()]);
+        builder.include(vec![async_openai::types::responses::IncludeEnum::ReasoningEncryptedContent]);
     }
 
     if let Some(t) = tools {
@@ -251,16 +251,16 @@ pub(super) async fn complete(
     
     for output_item in &response.output {
         match output_item {
-            OutputContent::Message(msg) => {
+            OutputItem::Message(msg) => {
                 for c in &msg.content {
-                    if let Content::OutputText(text) = c {
+                    if let async_openai::types::responses::OutputMessageContent::OutputText(text) = c {
                         content.push_str(&text.text);
                     }
                 }
             }
-            OutputContent::FunctionCall(fc) => {
+            OutputItem::FunctionCall(fc) => {
                 tool_uses.push(crate::ToolUse {
-                    id: fc.id.clone(),
+                    id: fc.id.clone().unwrap_or_default(),
                     call_id: Some(fc.call_id.clone()),
                     name: fc.name.clone(),
                     input: serde_json::from_str(&fc.arguments)
@@ -349,7 +349,7 @@ pub(super) async fn stream(
     // Include encrypted reasoning content for multi-turn tool calls with reasoning models (GPT-5.2-pro, o1, o3)
     // This is required for stateless multi-turn conversations - only for reasoning models
     if is_reasoning_model(&config.model) {
-        builder.include(vec!["reasoning.encrypted_content".to_string()]);
+        builder.include(vec![async_openai::types::responses::IncludeEnum::ReasoningEncryptedContent]);
     }
 
     if let Some(t) = tools {

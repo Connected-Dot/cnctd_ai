@@ -9,13 +9,14 @@ pub(super) async fn complete(
     config: &OpenAiConfig,
     request: &CompletionRequest,
 ) -> Result<CompletionResponse> {
-    use async_openai::types::{
+    use async_openai::types::chat::{
         ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
         ChatCompletionRequestUserMessageArgs, ChatCompletionRequestAssistantMessageArgs,
-        ChatCompletionRequestToolMessageArgs, ChatCompletionTool, ChatCompletionToolType,
+        ChatCompletionRequestToolMessageArgs, ChatCompletionTool, ChatCompletionTools,
+        ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
         FunctionObject, CreateChatCompletionRequestArgs,
     };
-    
+
     // Convert our messages to OpenAI format
     let mut messages = Vec::new();
     for msg in &request.messages {
@@ -61,49 +62,47 @@ pub(super) async fn complete(
             }
             crate::message::Role::Assistant => {
                 let mut builder = ChatCompletionRequestAssistantMessageArgs::default();
-                
+
                 // Add content if present
                 if !msg.content.is_empty() {
                     builder.content(msg.content.clone());
                 }
-                
+
                 // Add tool calls if present
                 if let Some(tool_uses) = &msg.tool_uses {
-                    let tool_calls: Vec<_> = tool_uses.iter().map(|tu| {
-                        async_openai::types::ChatCompletionMessageToolCall {
+                    let tool_calls: Vec<ChatCompletionMessageToolCalls> = tool_uses.iter().map(|tu| {
+                        ChatCompletionMessageToolCalls::Function(ChatCompletionMessageToolCall {
                             id: tu.id.clone(),
-                            r#type: async_openai::types::ChatCompletionToolType::Function,
-                            function: async_openai::types::FunctionCall {
+                            function: async_openai::types::chat::FunctionCall {
                                 name: tu.name.clone(),
                                 arguments: tu.input.to_string(),
                             },
-                        }
+                        })
                     }).collect();
                     builder.tool_calls(tool_calls);
                 }
-                
+
                 messages.push(ChatCompletionRequestMessage::Assistant(builder.build()?));
             }
         }
     }
-    
+
     // Build the request
     let mut request_builder = CreateChatCompletionRequestArgs::default();
     request_builder.model(&config.model).messages(messages);
-    
+
     // Add tools if present
     if let Some(tools) = &request.tools {
-        let openai_tools: Vec<ChatCompletionTool> = tools
+        let openai_tools: Vec<ChatCompletionTools> = tools
             .iter()
-            .map(|tool| ChatCompletionTool {
-                r#type: ChatCompletionToolType::Function,
+            .map(|tool| ChatCompletionTools::Function(ChatCompletionTool {
                 function: FunctionObject {
                     name: tool.name.to_string(),
                     description: tool.description.as_ref().map(|d| d.to_string()),
                     parameters: Some(serde_json::Value::Object((*tool.input_schema).clone())),
                     strict: None,
                 },
-            })
+            }))
             .collect();
         request_builder.tools(openai_tools);
     }
@@ -140,11 +139,19 @@ pub(super) async fn complete(
     
     // Extract tool calls if present
     let tool_uses_opt = choice.message.tool_calls.as_ref().map(|calls| {
-        calls.iter().map(|call| crate::ToolUse { call_id: None,
-            id: call.id.clone(),
-            name: call.function.name.clone(),
-            input: serde_json::from_str(&call.function.arguments)
-                .unwrap_or_else(|_| serde_json::Value::String(call.function.arguments.clone())),
+        calls.iter().filter_map(|call| {
+            match call {
+                async_openai::types::chat::ChatCompletionMessageToolCalls::Function(fc) => {
+                    Some(crate::ToolUse {
+                        call_id: None,
+                        id: fc.id.clone(),
+                        name: fc.function.name.clone(),
+                        input: serde_json::from_str(&fc.function.arguments)
+                            .unwrap_or_else(|_| serde_json::Value::String(fc.function.arguments.clone())),
+                    })
+                }
+                _ => None,
+            }
         }).collect()
     });
     
@@ -180,11 +187,11 @@ pub(super) async fn complete(
     };
     
     let finish_reason = match &choice.finish_reason {
-        Some(async_openai::types::FinishReason::Stop) => crate::response::FinishReason::Stop,
-        Some(async_openai::types::FinishReason::Length) => crate::response::FinishReason::Length,
-        Some(async_openai::types::FinishReason::ContentFilter) => crate::response::FinishReason::ContentFilter,
-        Some(async_openai::types::FinishReason::ToolCalls) => crate::response::FinishReason::ToolUse,
-        Some(async_openai::types::FinishReason::FunctionCall) => crate::response::FinishReason::ToolUse,
+        Some(async_openai::types::chat::FinishReason::Stop) => crate::response::FinishReason::Stop,
+        Some(async_openai::types::chat::FinishReason::Length) => crate::response::FinishReason::Length,
+        Some(async_openai::types::chat::FinishReason::ContentFilter) => crate::response::FinishReason::ContentFilter,
+        Some(async_openai::types::chat::FinishReason::ToolCalls) => crate::response::FinishReason::ToolUse,
+        Some(async_openai::types::chat::FinishReason::FunctionCall) => crate::response::FinishReason::ToolUse,
         _ => crate::response::FinishReason::Other,
     };
     
@@ -208,13 +215,14 @@ pub(super) async fn stream(
     config: &OpenAiConfig,
     request: &CompletionRequest,
 ) -> Result<CompletionStream> {
-    use async_openai::types::{
+    use async_openai::types::chat::{
         ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
         ChatCompletionRequestUserMessageArgs, ChatCompletionRequestAssistantMessageArgs,
-        ChatCompletionRequestToolMessageArgs, ChatCompletionTool, ChatCompletionToolType,
+        ChatCompletionRequestToolMessageArgs, ChatCompletionTool, ChatCompletionTools,
+        ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
         FunctionObject, CreateChatCompletionRequestArgs, ChatCompletionStreamOptions,
     };
-    
+
     // Convert our messages to OpenAI format - handle tool results and tool uses
     let mut messages = Vec::new();
     for msg in &request.messages {
@@ -260,32 +268,31 @@ pub(super) async fn stream(
             }
             crate::message::Role::Assistant => {
                 let mut builder = ChatCompletionRequestAssistantMessageArgs::default();
-                
+
                 // Add content if present
                 if !msg.content.is_empty() {
                     builder.content(msg.content.clone());
                 }
-                
+
                 // Add tool calls if present
                 if let Some(tool_uses) = &msg.tool_uses {
-                    let tool_calls: Vec<_> = tool_uses.iter().map(|tu| {
-                        async_openai::types::ChatCompletionMessageToolCall {
+                    let tool_calls: Vec<ChatCompletionMessageToolCalls> = tool_uses.iter().map(|tu| {
+                        ChatCompletionMessageToolCalls::Function(ChatCompletionMessageToolCall {
                             id: tu.id.clone(),
-                            r#type: async_openai::types::ChatCompletionToolType::Function,
-                            function: async_openai::types::FunctionCall {
+                            function: async_openai::types::chat::FunctionCall {
                                 name: tu.name.clone(),
                                 arguments: tu.input.to_string(),
                             },
-                        }
+                        })
                     }).collect();
                     builder.tool_calls(tool_calls);
                 }
-                
+
                 messages.push(ChatCompletionRequestMessage::Assistant(builder.build()?));
             }
         }
     }
-    
+
     // Build the request
     let mut request_builder = CreateChatCompletionRequestArgs::default();
     request_builder
@@ -293,22 +300,22 @@ pub(super) async fn stream(
         .messages(messages)
         .stream(true)
         .stream_options(ChatCompletionStreamOptions {
-            include_usage: true,
+            include_usage: Some(true),
+            include_obfuscation: None,
         });
 
     // Add tools if present
     if let Some(tools) = &request.tools {
-        let openai_tools: Vec<ChatCompletionTool> = tools
+        let openai_tools: Vec<ChatCompletionTools> = tools
             .iter()
-            .map(|tool| ChatCompletionTool {
-                r#type: ChatCompletionToolType::Function,
+            .map(|tool| ChatCompletionTools::Function(ChatCompletionTool {
                 function: FunctionObject {
                     name: tool.name.to_string(),
                     description: tool.description.as_ref().map(|d| d.to_string()),
                     parameters: Some(serde_json::Value::Object((*tool.input_schema).clone())),
                     strict: None,
                 },
-            })
+            }))
             .collect();
         request_builder.tools(openai_tools);
     }
@@ -331,7 +338,6 @@ pub(super) async fn stream(
         }
     }
 
-    eprintln!("DEBUG: Building OpenAI streaming request with stream_options");
     let openai_request = request_builder.build()?;
     
     // Make the streaming API call

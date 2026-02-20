@@ -1,7 +1,8 @@
-use async_openai::types::{
+use async_openai::types::audio::{
     AudioInput as OpenAiAudioInput, AudioResponseFormat, CreateTranscriptionRequest,
-    InputSource, TimestampGranularity,
+    TimestampGranularity,
 };
+use async_openai::types::InputSource;
 use crate::client::config::OpenAiConfig;
 use crate::error::{Error, Result};
 use super::{AudioInput, TranscriptionRequest, TranscriptionResponse, TranscriptSegment};
@@ -75,6 +76,11 @@ pub(crate) async fn transcribe(
         temperature: None,
         language: request.language.clone(),
         timestamp_granularities: None,
+        chunking_strategy: None,
+        include: None,
+        known_speaker_names: None,
+        known_speaker_references: None,
+        stream: None,
     };
 
     // Request timestamps if needed
@@ -88,7 +94,8 @@ pub(crate) async fn transcribe(
     // Use verbose_json to get segments and timing
     let response = sdk_client
         .audio()
-        .transcribe_verbose_json(openai_request)
+        .transcription()
+        .create_verbose_json(openai_request)
         .await?;
 
     // Convert segments if present
