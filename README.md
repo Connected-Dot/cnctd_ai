@@ -14,16 +14,13 @@ A Rust abstraction layer for AI/LLM providers (Anthropic Claude, OpenAI, Google 
 
 ## Installation
 
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-cnctd_ai = "0.1.5"
+```bash
+cargo add cnctd_ai
 ```
 
 ## Quick Start
 
-### Agent Framework (NEW!)
+### Agent Framework
 
 The easiest way to build autonomous AI applications:
 
@@ -295,7 +292,7 @@ See the [Obfuscation Setup Guide](crates/cnctd_ai_server/docs/OBFUSCATION_SETUP.
 
 - [Agent Framework Guide](docs/AGENT_FRAMEWORK.md) - Complete agent framework documentation
 - [Obfuscation Setup Guide](crates/cnctd_ai_server/docs/OBFUSCATION_SETUP.md) - Integration guide for cnctd_ai_server obfuscation
-- [API Documentation](https://docs.rs/cnctd_ai) - Full API reference (coming soon)
+- [API Documentation](https://docs.rs/cnctd_ai) - Full API reference
 
 ## License
 

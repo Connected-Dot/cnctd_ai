@@ -225,7 +225,6 @@ See the examples directory:
 
 - `agent_simple.rs` - Minimal setup and usage
 - `agent_basic.rs` - Full-featured example with configuration
-- `agent_custom_tools.rs` - Using custom tool executors (coming soon)
 
 Run examples:
 
