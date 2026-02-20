@@ -1,0 +1,29 @@
+[package]
+name = "cnctd_ai_server"
+version = "0.1.0"
+edition = "2021"
+authors = ["Connected Dot Inc.", "Kyle Ebner <kyle@cnctd.world>"]
+description = "AI orchestration server with streaming, tool execution, and obfuscation"
+repository = "https://github.com/Connected-Dot/cnctd_ai"
+license = "MIT"
+
+[dependencies]
+cnctd_ai = { path = "../.." }
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tower-http = { version = "0.6", features = ["cors"] }
+dotenvy = "0.15"
+uuid = { version = "1", features = ["v4"] }
+futures = "0.3"
+async-stream = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+tokio-postgres = "0.7"
+rand = "0.8"
+regex = "1"
+aho-corasick = "1"
