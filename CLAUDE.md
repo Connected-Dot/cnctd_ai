@@ -126,6 +126,7 @@ cnctd.world/server/src/
 
 ```
 cnctd_ai/
+├── Cargo.toml              # [package] cnctd_ai library
 ├── src/
 │   ├── lib.rs              # Public exports
 │   ├── client.rs           # Unified Client struct
@@ -139,10 +140,38 @@ cnctd_ai/
 │   │   └── client.rs       # Stdio MCP client
 │   ├── agent/              # Agent framework
 │   └── error.rs            # Error types
+├── crates/
+│   └── cnctd_ai_server/    # AI orchestration server (from llm-service)
+│       ├── Cargo.toml
+│       └── src/
+│           ├── main.rs
+│           ├── config.rs
+│           ├── state.rs
+│           ├── routes/     # HTTP endpoints (chat, agents, models)
+│           └── obfuscation/ # 4-point interception layer
 ├── examples/               # Usage examples
-├── docs/                   # Additional documentation
+├── docs/                   # Session summaries, post-mortems, design docs
+│   ├── SESSION_*.md        # Auto-generated session summaries
+│   ├── POST_MORTEM_*.md    # Incident reports
+│   └── AGENT_FRAMEWORK.md
+├── .claude/
+│   ├── agents/             # session-summary-writer, post-mortem-writer
+│   ├── hooks/              # session-start.sh, session-end.sh
+│   ├── skills/             # session-summary workflow
+│   └── settings.local.json # Permissions and hook config
 └── tests/                  # Integration tests
 ```
+
+### Subcrate: cnctd_ai_server
+
+The `crates/cnctd_ai_server/` crate is an Axum-based REST API absorbed from the standalone `llm-service` repo. It provides:
+
+- **Streaming SSE chat** with full tool-calling loops
+- **MCP integration** for tool discovery and execution
+- **4-point obfuscation layer** (user->LLM, LLM->tool, tool->LLM, LLM->user)
+- **Agent execution** with background task management
+
+**IP Note**: The obfuscation system contains client-specific logic (Transmit Live work product). The cnctd_ai library itself is Connected Dot Inc. open-source code.
 
 ## Common Patterns
 
@@ -276,6 +305,30 @@ When persisting conversations to a database, applications must:
 - Ensure every reconstructed `function_call` has a matching `function_call_output`
 - Preserve `reasoning_items` for reasoning model conversations
 
+## Session Protocol
+
+### Session Start
+1. Check `git status` for uncommitted changes
+2. Review previous session summary (injected automatically via hook)
+3. Pull latest if needed
+
+### Session End
+1. Commit and push all changes
+2. **Run `/session-summary`** to generate a structured summary
+3. NEVER write session summaries yourself - the session-summary-writer agent reads the transcript and writes the file
+
+### Post-Mortems
+If something went wrong, run the post-mortem-writer agent:
+- Analyzes the transcript for what went wrong
+- Produces a structured incident report with fix plan
+- Written to `docs/POST_MORTEM_*.md`
+
+### Working on Behalf of Clients
+When working on `cnctd_ai_server` for Transmit Live / inventory-manager:
+- Note the client context in session summaries
+- Keep IP boundaries clear: cnctd_ai = Connected Dot, obfuscation = Transmit Live
+- Start Claude Code sessions in **this workspace** (cnctd_ai), not inventory-manager
+
 ## Development
 
 ```bash
@@ -285,8 +338,8 @@ cargo test
 # Run example
 cargo run --example basic_completion
 
-# Check types
-cargo check
+# Check types (both crates)
+cargo check -p cnctd_ai -p cnctd_ai_server
 ```
 
 ## Related Documentation

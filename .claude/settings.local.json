@@ -1,12 +1,38 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cargo check:*)",
-      "Bash(cargo build:*)",
-      "Bash(git add:*)",
-      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd transcription services for audio-to-text conversion\n\n- Add TranscriptionRequest/Response types with timestamps and diarization support\n- Implement OpenAI Whisper transcription \\(whisper-1, gpt-4o-transcribe models\\)\n- Implement Gemini multimodal audio transcription via generateContent API\n- Add AudioInput enum supporting file paths, URLs, and raw bytes\n- Add transcription_model option to OpenAiConfig\n- Add AudioTooLarge and UnsupportedAudioFormat error variants\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Bash(git push:*)",
-      "Bash(cargo publish:*)"
+      "Bash(git:*)",
+      "Bash(cargo:*)",
+      "Bash(chmod:*)",
+      "Bash(mkdir:*)",
+      "Bash(ls:*)",
+      "Bash(rustfmt:*)",
+      "Write(*/docs/SESSION_*.md)",
+      "Write(*/docs/POST_MORTEM_*.md)",
+      "Task(session-summary-writer)",
+      "Task(post-mortem-writer)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/session-start.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/session-end.sh"
+          }
+        ]
+      }
     ]
   }
 }
