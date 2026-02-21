@@ -122,6 +122,14 @@ impl SessionCache {
         sessions.remove(salt).is_some()
     }
 
+    /// Remove all sessions from the cache.
+    pub async fn invalidate_all(&self) -> usize {
+        let mut sessions = self.sessions.write().await;
+        let count = sessions.len();
+        sessions.clear();
+        count
+    }
+
     /// The source token, used to authenticate invalidation requests.
     pub fn source_token(&self) -> &str {
         &self.source_token

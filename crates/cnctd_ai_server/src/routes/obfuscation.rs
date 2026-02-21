@@ -7,14 +7,16 @@ use crate::state::AppState;
 
 #[derive(Deserialize)]
 pub struct InvalidateRequest {
-    pub session_salt: String,
+    #[serde(default)]
+    pub session_salt: Option<String>,
 }
 
 /// POST /obfuscation/invalidate
 ///
-/// Removes a cached obfuscation session so the next request for that salt
-/// re-fetches from the source URL. Authenticated with the same bearer token
-/// used by the source URL (`OBFUSCATION_SOURCE_TOKEN`).
+/// If `session_salt` is provided, removes that specific cached session.
+/// If omitted, clears all cached sessions (bulk invalidation).
+/// Authenticated with the same bearer token used by the source URL
+/// (`OBFUSCATION_SOURCE_TOKEN`).
 pub async fn invalidate_session(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -37,11 +39,19 @@ pub async fn invalidate_session(
         _ => return StatusCode::UNAUTHORIZED,
     }
 
-    if cache.invalidate(&body.session_salt).await {
-        tracing::info!(
-            "Invalidated obfuscation session [salt={}...]",
-            &body.session_salt[..body.session_salt.len().min(8)]
-        );
+    match body.session_salt {
+        Some(salt) => {
+            if cache.invalidate(&salt).await {
+                tracing::info!(
+                    "Invalidated obfuscation session [salt={}...]",
+                    &salt[..salt.len().min(8)]
+                );
+            }
+        }
+        None => {
+            let count = cache.invalidate_all().await;
+            tracing::info!("Invalidated all obfuscation sessions ({})", count);
+        }
     }
 
     StatusCode::OK
