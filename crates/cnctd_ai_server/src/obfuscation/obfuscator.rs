@@ -161,7 +161,8 @@ impl Obfuscator {
                     if let Some((entity_type, id)) = self.session.tokenizer.deobfuscate_token(s) {
                         // If used in a context that expects an ID (numeric), return the ID
                         // Otherwise return the name
-                        if let Some(record) = self.session.dictionary.lookup_by_id(&entity_type, id)
+                        if let Some(record) =
+                            self.session.dictionary.lookup_by_id(&entity_type, &id)
                         {
                             return serde_json::Value::String(record.name.clone());
                         }
@@ -196,12 +197,18 @@ impl Obfuscator {
         }
     }
 
-    /// If the value is a token string, replace with the numeric ID.
+    /// If the value is a token string, replace with the original ID.
+    /// Returns a JSON number if the ID is numeric, otherwise a JSON string.
     fn deobfuscate_to_id(&self, value: &serde_json::Value) -> serde_json::Value {
         match value {
             serde_json::Value::String(s) => {
                 if let Some((_entity_type, id)) = self.session.tokenizer.deobfuscate_token(s) {
-                    serde_json::Value::Number(serde_json::Number::from(id))
+                    // Try to return as a number (Publica integer IDs), fall back to string (MongoDB ObjectIds)
+                    if let Ok(n) = id.parse::<i64>() {
+                        serde_json::Value::Number(serde_json::Number::from(n))
+                    } else {
+                        serde_json::Value::String(id)
+                    }
                 } else {
                     self.walk_json_deobfuscate(value)
                 }
@@ -221,6 +228,15 @@ impl Obfuscator {
     ) -> serde_json::Value {
         match value {
             serde_json::Value::String(s) => {
+                // If parent key is an ID field, try to obfuscate as entity ID first
+                if let Some(key) = parent_key {
+                    if self.session.key_inference.is_id_field(key) {
+                        let result = self.try_obfuscate_id_value(key, s);
+                        if result != serde_json::Value::String(s.clone()) {
+                            return result;
+                        }
+                    }
+                }
                 // Replace entity names with tokens
                 let obfuscated = self
                     .session
@@ -234,7 +250,7 @@ impl Obfuscator {
                     if self.session.key_inference.is_id_field(key) {
                         if let Some(f) = n.as_i64() {
                             // Try to find entity and replace with token
-                            return self.try_obfuscate_id_value(key, f as i32);
+                            return self.try_obfuscate_id_value(key, &f.to_string());
                         }
                     }
                     // Check if this key is a metric that should be scaled
@@ -264,9 +280,10 @@ impl Obfuscator {
         }
     }
 
-    /// Try to replace a numeric ID with an entity token.
+    /// Try to replace an ID value with an entity token.
     /// Checks the inferred entity type first, then falls back to trying all types.
-    fn try_obfuscate_id_value(&self, key: &str, id: i32) -> serde_json::Value {
+    /// Returns the original value (as number if parseable, otherwise string) if no match.
+    fn try_obfuscate_id_value(&self, key: &str, id: &str) -> serde_json::Value {
         // Try inferred entity type first
         if let Some(et) = self.session.key_inference.infer_entity_type(key) {
             if let Some(token) = self.session.tokenizer.obfuscate_id(et, id) {
@@ -281,7 +298,11 @@ impl Obfuscator {
             }
         }
 
-        // Not a known entity ID, pass through
-        serde_json::Value::Number(serde_json::Number::from(id))
+        // Not a known entity ID, pass through in original form
+        if let Ok(n) = id.parse::<i64>() {
+            serde_json::Value::Number(serde_json::Number::from(n))
+        } else {
+            serde_json::Value::String(id.to_string())
+        }
     }
 }

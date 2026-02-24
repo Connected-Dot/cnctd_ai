@@ -23,8 +23,24 @@ pub struct ObfuscationSourceResponse {
 pub struct EntityPayload {
     #[serde(rename = "type")]
     pub entity_type: String,
-    pub id: i32,
+    /// Entity ID — accepts both JSON numbers (Publica integer IDs) and
+    /// JSON strings (MongoDB ObjectIds) by normalising to String.
+    #[serde(deserialize_with = "deserialize_id_as_string")]
+    pub id: String,
     pub name: String,
+}
+
+/// Custom deserializer: accept a JSON number or string and return a String.
+fn deserialize_id_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        serde_json::Value::String(s) => Ok(s),
+        _ => Err(serde::de::Error::custom("expected number or string for id")),
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]

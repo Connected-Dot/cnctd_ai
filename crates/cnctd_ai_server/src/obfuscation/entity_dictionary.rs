@@ -3,7 +3,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct EntityRecord {
     pub entity_type: String,
-    pub id: i32,
+    pub id: String,
     pub name: String,
 }
 
@@ -11,7 +11,7 @@ pub struct EntityDictionary {
     /// name (lowercase) -> records with that name
     name_to_records: HashMap<String, Vec<EntityRecord>>,
     /// (type, id) -> record
-    id_to_record: HashMap<(String, i32), EntityRecord>,
+    id_to_record: HashMap<(String, String), EntityRecord>,
     /// All distinct entity type names
     entity_types: Vec<String>,
 }
@@ -39,7 +39,7 @@ impl EntityDictionary {
                 .or_default()
                 .push(record.clone());
             self.id_to_record
-                .insert((record.entity_type.clone(), record.id), record);
+                .insert((record.entity_type.clone(), record.id.clone()), record);
         }
 
         self.entity_types = type_set.into_iter().collect();
@@ -52,8 +52,9 @@ impl EntityDictionary {
             .map(|v| v.as_slice())
     }
 
-    pub fn lookup_by_id(&self, entity_type: &str, id: i32) -> Option<&EntityRecord> {
-        self.id_to_record.get(&(entity_type.to_string(), id))
+    pub fn lookup_by_id(&self, entity_type: &str, id: &str) -> Option<&EntityRecord> {
+        self.id_to_record
+            .get(&(entity_type.to_string(), id.to_string()))
     }
 
     pub fn all_names(&self) -> Vec<&str> {

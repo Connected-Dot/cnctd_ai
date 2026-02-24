@@ -13,9 +13,9 @@ pub struct HmacTokenizer {
     salt: String,
     suffix_length: usize,
     /// (entity_type, id) -> token
-    id_to_token: HashMap<(String, i32), String>,
+    id_to_token: HashMap<(String, String), String>,
     /// token -> (entity_type, id)
-    token_to_id: HashMap<String, (String, i32)>,
+    token_to_id: HashMap<String, (String, String)>,
     /// lowercase name -> token (first match wins for ambiguous names)
     name_to_token: HashMap<String, String>,
     used_tokens: HashSet<String>,
@@ -62,11 +62,15 @@ impl HmacTokenizer {
         self.used_tokens.clear();
 
         for record in dictionary.all_records() {
-            let token = self.generate_unique_token(&record.entity_type, record.id);
-            self.id_to_token
-                .insert((record.entity_type.clone(), record.id), token.clone());
-            self.token_to_id
-                .insert(token.clone(), (record.entity_type.clone(), record.id));
+            let token = self.generate_unique_token(&record.entity_type, &record.id);
+            self.id_to_token.insert(
+                (record.entity_type.clone(), record.id.clone()),
+                token.clone(),
+            );
+            self.token_to_id.insert(
+                token.clone(),
+                (record.entity_type.clone(), record.id.clone()),
+            );
 
             // Map name -> token (first record wins for duplicate names)
             let lower_name = record.name.to_lowercase();
@@ -115,7 +119,7 @@ impl HmacTokenizer {
         self.ac_pattern_lengths = pattern_lengths;
     }
 
-    fn generate_unique_token(&mut self, entity_type: &str, id: i32) -> String {
+    fn generate_unique_token(&mut self, entity_type: &str, id: &str) -> String {
         let base_input = format!("{}:{}", entity_type, id);
 
         for attempt in 0..100 {
@@ -151,13 +155,13 @@ impl HmacTokenizer {
         token
     }
 
-    pub fn obfuscate_id(&self, entity_type: &str, id: i32) -> Option<&str> {
+    pub fn obfuscate_id(&self, entity_type: &str, id: &str) -> Option<&str> {
         self.id_to_token
-            .get(&(entity_type.to_string(), id))
+            .get(&(entity_type.to_string(), id.to_string()))
             .map(|s| s.as_str())
     }
 
-    pub fn deobfuscate_token(&self, token: &str) -> Option<(String, i32)> {
+    pub fn deobfuscate_token(&self, token: &str) -> Option<(String, String)> {
         self.token_to_id.get(token).cloned()
     }
 
@@ -175,7 +179,7 @@ impl HmacTokenizer {
     ) -> Option<String> {
         let (entity_type, id) = self.deobfuscate_token(token)?;
         dictionary
-            .lookup_by_id(&entity_type, id)
+            .lookup_by_id(&entity_type, &id)
             .map(|r| r.name.clone())
     }
 
@@ -199,15 +203,15 @@ impl HmacTokenizer {
     pub fn export_token_map(
         &self,
         dictionary: &EntityDictionary,
-    ) -> Vec<(String, i32, String, String)> {
+    ) -> Vec<(String, String, String, String)> {
         self.id_to_token
             .iter()
             .map(|((entity_type, id), token)| {
                 let name = dictionary
-                    .lookup_by_id(entity_type, *id)
+                    .lookup_by_id(entity_type, id)
                     .map(|r| r.name.clone())
                     .unwrap_or_default();
-                (entity_type.clone(), *id, name, token.clone())
+                (entity_type.clone(), id.clone(), name, token.clone())
             })
             .collect()
     }
