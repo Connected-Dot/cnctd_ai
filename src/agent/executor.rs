@@ -1,8 +1,8 @@
+use std::sync::Arc;
 use std::time::Instant;
-use serde_json::Value;
 
-use crate::{Client, CompletionRequest, CompletionResponse, Error, Message, ToolUse};
-use crate::mcp::{McpGateway, tool_result_to_string};
+use crate::{Client, CompletionRequest, Error, Message, ToolUse};
+use crate::mcp::{McpClient, tool_result_to_string};
 
 use super::{AgentConfig, AgentState, AgentTrace, StopReason, TraceEvent, ToolExecution};
 
@@ -10,19 +10,19 @@ use super::{AgentConfig, AgentState, AgentTrace, StopReason, TraceEvent, ToolExe
 pub struct AgentExecutor<'a> {
     client: &'a Client,
     config: &'a AgentConfig,
-    gateway: Option<&'a McpGateway>,
+    mcp_client: Option<Arc<McpClient>>,
 }
 
 impl<'a> AgentExecutor<'a> {
     pub fn new(
         client: &'a Client,
         config: &'a AgentConfig,
-        gateway: Option<&'a McpGateway>,
+        mcp_client: Option<Arc<McpClient>>,
     ) -> Self {
         Self {
             client,
             config,
-            gateway,
+            mcp_client,
         }
     }
     
@@ -163,12 +163,9 @@ impl<'a> AgentExecutor<'a> {
             let start = Instant::now();
             
             // Try to execute the tool
-            let result = if let Some(gateway) = self.gateway {
-                // MCP tool execution
-                self.execute_mcp_tool(gateway, tool_use).await
+            let result = if let Some(mcp_client) = &self.mcp_client {
+                self.execute_mcp_tool(mcp_client, tool_use).await
             } else {
-                // For now, only MCP tools are supported
-                // In the future, this could support custom tool executors
                 Err("No tool executor available".to_string())
             };
             
@@ -194,53 +191,19 @@ impl<'a> AgentExecutor<'a> {
         }
     }
     
-    /// Execute a tool via MCP gateway
+    /// Execute a tool via MCP client
     async fn execute_mcp_tool(
         &self,
-        gateway: &McpGateway,
+        mcp_client: &McpClient,
         tool_use: &ToolUse,
     ) -> Result<(String, String), String> {
-        // Parse tool name to extract server and tool
-        // Format: "server_name:tool_name" or just "tool_name"
-        let (server_name, tool_name) = if tool_use.name.contains(':') {
-            let parts: Vec<&str> = tool_use.name.splitn(2, ':').collect();
-            (parts[0].to_string(), parts[1].to_string())
-        } else {
-            // Try to infer server from available tools
-            match self.find_server_for_tool(gateway, &tool_use.name).await {
-                Some(server) => (server, tool_use.name.clone()),
-                None => return Err(format!("Could not find server for tool: {}", tool_use.name)),
-            }
-        };
-        
-        // Execute the tool
-        let result = gateway
-            .call_tool(&server_name, &tool_name, Some(tool_use.input.clone()))
+        let result = mcp_client
+            .call_tool(&tool_use.name, Some(tool_use.input.clone()))
             .await
             .map_err(|e| format!("MCP tool error: {}", e))?;
-        
+
         let output = tool_result_to_string(&result);
-        Ok((output, server_name))
-    }
-    
-    /// Find which server provides a given tool
-    async fn find_server_for_tool(
-        &self,
-        gateway: &McpGateway,
-        tool_name: &str,
-    ) -> Option<String> {
-        // Get all servers
-        let servers = gateway.list_servers().await.ok()?;
-        
-        // Check each server for the tool
-        for server in servers {
-            let tools = gateway.list_tools(&server.name).await.ok()?;
-            if tools.iter().any(|t| t.name == tool_name) {
-                return Some(server.name);
-            }
-        }
-        
-        None
+        Ok((output, "mcp".to_string()))
     }
     
     /// Truncate result if it exceeds configured length

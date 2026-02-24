@@ -105,8 +105,6 @@ async fn execute_agent(state: &AppState, req: &RunAgentRequest) -> Result<Value,
     let client = crate::routes::chat::build_client(state, &req.model)?;
     let tools = load_tools(state, &req.tools).await;
 
-    let gateway = state.gateway.as_ref();
-
     let mut builder = Agent::builder(&client)
         .max_iterations(req.max_iterations)
         .max_duration(Duration::from_secs(req.max_duration_secs));
@@ -115,8 +113,8 @@ async fn execute_agent(state: &AppState, req: &RunAgentRequest) -> Result<Value,
         builder = builder.system_prompt(sp);
     }
 
-    if let Some(gw) = gateway {
-        builder = builder.gateway(gw);
+    if let Some(mcp_client) = &state.mcp_client {
+        builder = builder.mcp_client(mcp_client.clone());
     }
 
     let agent = builder.build();
@@ -143,7 +141,7 @@ async fn execute_agent(state: &AppState, req: &RunAgentRequest) -> Result<Value,
         "iterations": trace.iterations,
         "errors": trace.errors,
         "successful_tool_calls": trace.successful_tool_calls,
-        "events": trace.events.iter().map(|e| json!(format!("{:?}", e))).collect::<Vec<_>>(),
+        "events": serde_json::to_value(&trace.events).unwrap_or_default(),
     });
 
     Ok(trace_json)
