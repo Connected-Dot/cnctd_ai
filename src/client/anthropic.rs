@@ -284,21 +284,56 @@ pub(super) async fn stream(
                     let mut content_blocks = Vec::new();
 
                     // Add documents first (Anthropic prefers documents before text)
+                    // NOTE: Anthropic only supports application/pdf for the "document" block type.
+                    // For text-based files (CSV, TXT, MD, etc.), decode base64 and send as text blocks.
                     if let Some(documents) = &msg.documents {
                         for doc in documents {
-                            let mut doc_block = serde_json::json!({
-                                "type": "document",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": doc.media_type,
-                                    "data": doc.data
+                            if doc.media_type == "application/pdf" {
+                                // PDF: use native document block
+                                let mut doc_block = serde_json::json!({
+                                    "type": "document",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": doc.media_type,
+                                        "data": doc.data
+                                    }
+                                });
+                                if msg.cache_control.is_some() {
+                                    doc_block["cache_control"] = serde_json::json!({ "type": "ephemeral" });
                                 }
-                            });
-                            // Add cache_control if message has it set
-                            if msg.cache_control.is_some() {
-                                doc_block["cache_control"] = serde_json::json!({ "type": "ephemeral" });
+                                content_blocks.push(doc_block);
+                            } else if doc.media_type.starts_with("text/")
+                                || doc.media_type == "application/json"
+                                || doc.media_type == "application/xml"
+                            {
+                                // Text-based files: decode base64 and send as text block
+                                if let Ok(decoded) = base64::Engine::decode(
+                                    &base64::engine::general_purpose::STANDARD,
+                                    &doc.data,
+                                ) {
+                                    let text_content = String::from_utf8_lossy(&decoded);
+                                    let label = doc.filename.as_deref().unwrap_or("document");
+                                    let formatted = format!(
+                                        "[File: {label} ({})]\n{text_content}",
+                                        doc.media_type
+                                    );
+                                    content_blocks.push(serde_json::json!({
+                                        "type": "text",
+                                        "text": formatted
+                                    }));
+                                } else {
+                                    eprintln!(
+                                        "[cnctd_ai] Failed to decode base64 for text document: {}",
+                                        doc.filename.as_deref().unwrap_or("unknown")
+                                    );
+                                }
+                            } else {
+                                // Binary non-PDF (DOCX, XLSX, etc.): not supported by Anthropic
+                                eprintln!(
+                                    "[cnctd_ai] Skipping unsupported document type for Anthropic: {}",
+                                    doc.media_type
+                                );
                             }
-                            content_blocks.push(doc_block);
                         }
                     }
 
