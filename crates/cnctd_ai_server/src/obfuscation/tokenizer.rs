@@ -36,7 +36,12 @@ impl HmacTokenizer {
             .map(|t| regex::escape(t))
             .collect::<Vec<_>>()
             .join("|");
-        let pattern = format!(r"\b({})_[0-9a-f]{{{},}}\b", type_alternation, suffix_length);
+        // Case-insensitive and accept both underscore and space as separator.
+        // LLMs commonly reformat tokens (e.g. channel_a1b2 -> "Channel a1b2").
+        let pattern = format!(
+            r"(?i)\b({})[ _][0-9a-f]{{{},}}\b",
+            type_alternation, suffix_length
+        );
         let token_pattern = Regex::new(&pattern).expect("Invalid token regex");
 
         Self {
@@ -188,12 +193,16 @@ impl HmacTokenizer {
     }
 
     /// Replace all tokens in text with their real entity names.
+    /// Normalises LLM-reformatted variants (e.g. "Channel a1b2") back to the
+    /// canonical form ("channel_a1b2") before looking up in the dictionary.
     pub fn deobfuscate_text(&self, text: &str, dictionary: &EntityDictionary) -> String {
         self.token_pattern
             .replace_all(text, |caps: &regex::Captures| {
-                let token = caps.get(0).unwrap().as_str();
-                self.deobfuscate_to_name(token, dictionary)
-                    .unwrap_or_else(|| token.to_string())
+                let matched = caps.get(0).unwrap().as_str();
+                // Normalise: lowercase + replace space with underscore
+                let normalised = matched.to_lowercase().replace(' ', "_");
+                self.deobfuscate_to_name(&normalised, dictionary)
+                    .unwrap_or_else(|| matched.to_string())
             })
             .into_owned()
     }

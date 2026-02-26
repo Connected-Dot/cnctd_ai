@@ -157,8 +157,12 @@ impl Obfuscator {
             serde_json::Value::String(s) => {
                 let token_re = self.session.tokenizer.token_regex();
                 if token_re.is_match(s) {
+                    // Normalise LLM-reformatted tokens before lookup
+                    let normalised = s.to_lowercase().replace(' ', "_");
                     // Check if the entire string is a single token
-                    if let Some((entity_type, id)) = self.session.tokenizer.deobfuscate_token(s) {
+                    if let Some((entity_type, id)) =
+                        self.session.tokenizer.deobfuscate_token(&normalised)
+                    {
                         // If used in a context that expects an ID (numeric), return the ID
                         // Otherwise return the name
                         if let Some(record) =

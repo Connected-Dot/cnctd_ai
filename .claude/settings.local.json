@@ -20,7 +20,17 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:docs.rs)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "WebFetch(domain:platform.openai.com)",
+      "WebFetch(domain:docs.anthropic.com)",
+      "WebFetch(domain:ai.google.dev)",
+      "WebFetch(domain:developers.openai.com)",
+      "WebFetch(domain:firebase.google.com)",
+      "WebFetch(domain:docs.google.com)",
+      "WebFetch(domain:docs.cloud.google.com)",
+      "WebFetch(domain:discuss.ai.google.dev)",
+      "WebFetch(domain:medium.com)",
+      "Bash(find:*)"
     ]
   },
   "hooks": {
