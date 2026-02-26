@@ -1,6 +1,6 @@
 [package]
 name = "cnctd_ai"
-version = "0.1.24"
+version = "0.1.25"
 edition = "2024"
 authors = ["Connected Dot Inc.", "Kyle Ebner <kyle@cnctd.world>"]
 description = "Multi-provider AI/LLM abstraction layer with MCP support (Anthropic, OpenAI, Gemini, OpenRouter)"
