@@ -3,9 +3,9 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::Json;
 use cnctd_ai::client::{AnthropicConfig, GeminiConfig, OpenAiConfig};
 use cnctd_ai::mcp::tool_result_to_string;
-use cnctd_ai::{Client, CompletionRequest, Message, RequestOptions, Tool, ToolResult, ToolUse, ToolUseEvent};
+use cnctd_ai::{BuiltInTool, Client, CompletionRequest, DocumentContent, ImageContent, Message, RequestOptions, Tool, ToolResult, ToolUse, ToolUseEvent};
 use futures::stream::Stream;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::convert::Infallible;
 use std::time::Duration;
@@ -109,6 +109,39 @@ pub struct ChatRequest {
     pub max_tool_iterations: Option<usize>,
     #[serde(default)]
     pub session_salt: Option<String>,
+    /// Provider-specific built-in tools: "google_search", "code_execution", "url_context", etc.
+    #[serde(default)]
+    pub built_in_tools: Option<Vec<String>>,
+    /// Sampling temperature (0.0 - 2.0)
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    /// Maximum output tokens
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// Top-p sampling
+    #[serde(default)]
+    pub top_p: Option<f32>,
+}
+
+/// Convert string-based built-in tool names to `BuiltInTool` enum values.
+fn parse_built_in_tools(names: &[String]) -> Vec<BuiltInTool> {
+    names
+        .iter()
+        .filter_map(|name| match name.to_lowercase().as_str() {
+            "google_search" => Some(BuiltInTool::GoogleSearch),
+            "google_search_retrieval" => Some(BuiltInTool::GoogleSearchRetrieval { dynamic_threshold: None }),
+            "code_execution" => Some(BuiltInTool::CodeExecution),
+            "url_context" => Some(BuiltInTool::UrlContext),
+            "google_maps" => Some(BuiltInTool::GoogleMaps { enable_widget: None }),
+            "openai_code_interpreter" | "code_interpreter" => Some(BuiltInTool::OpenAiCodeInterpreter),
+            "openai_web_search" | "web_search" => Some(BuiltInTool::OpenAiWebSearch),
+            "openai_image_generation" | "image_generation" => Some(BuiltInTool::OpenAiImageGeneration),
+            other => {
+                tracing::warn!("Unknown built-in tool: {other}");
+                None
+            }
+        })
+        .collect()
 }
 
 fn default_stream() -> bool {
@@ -129,6 +162,12 @@ pub struct ChatMessage {
     /// Tool results from a user message (for multi-turn tool calling)
     #[serde(default)]
     pub tool_results: Option<Vec<ChatToolResult>>,
+    /// Images attached to a user message (vision support)
+    #[serde(default)]
+    pub images: Option<Vec<ChatImage>>,
+    /// Documents attached to a user message (PDF, CSV, etc.)
+    #[serde(default)]
+    pub documents: Option<Vec<ChatDocument>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -146,6 +185,20 @@ pub struct ChatToolResult {
     pub is_error: bool,
     #[serde(default)]
     pub function_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ChatImage {
+    pub data: String,
+    pub media_type: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ChatDocument {
+    pub data: String,
+    pub media_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
 }
 
 pub fn resolve_provider(model: &str) -> &str {
@@ -285,6 +338,31 @@ fn convert_messages(msgs: &[ChatMessage]) -> Vec<Message> {
                         })
                         .collect();
                     Message::tool_results(results)
+                } else if m.images.is_some() || m.documents.is_some() {
+                    // Build message with media attachments (vision/document support)
+                    let mut msg = Message::user(&m.content);
+                    if let Some(ref images) = m.images {
+                        msg.images = Some(
+                            images
+                                .iter()
+                                .map(|img| ImageContent::new(&img.data, &img.media_type))
+                                .collect(),
+                        );
+                    }
+                    if let Some(ref docs) = m.documents {
+                        msg.documents = Some(
+                            docs.iter()
+                                .map(|doc| {
+                                    let mut d = DocumentContent::new(&doc.data, &doc.media_type);
+                                    if let Some(ref filename) = doc.filename {
+                                        d = d.with_filename(filename);
+                                    }
+                                    d
+                                })
+                                .collect(),
+                        );
+                    }
+                    msg
                 } else {
                     Message::user(&m.content)
                 }
@@ -391,6 +469,12 @@ pub async fn chat_stream(
         let mut final_model = String::new();
         let mut final_finish_reason = String::new();
         let mut final_tool_uses: Vec<serde_json::Value> = Vec::new();
+        // Rich response metadata (populated from last CompletionResponse)
+        let mut final_grounding: Option<serde_json::Value> = None;
+        let mut final_code_execution: Option<serde_json::Value> = None;
+        let mut final_citations: Option<serde_json::Value> = None;
+        let mut final_reasoning_summary: Option<String> = None;
+        let mut final_maps_widget: Option<String> = None;
         let max_token_len = obfuscator
             .as_ref()
             .map(|o| o.max_token_length())
@@ -427,7 +511,11 @@ pub async fn chat_stream(
                                 }
                             }));
                         }
-                        msgs.push(Message::user(&obfuscated));
+                        // Preserve images/documents from the original message
+                        let mut obf_msg = Message::user(&obfuscated);
+                        obf_msg.images = m.images.clone();
+                        obf_msg.documents = m.documents.clone();
+                        msgs.push(obf_msg);
                     } else {
                         msgs.push(m.clone());
                     }
@@ -440,13 +528,16 @@ pub async fn chat_stream(
                 yield Ok(Event::default().data(evt.to_string()));
             }
 
+            let built_in = req.built_in_tools.as_ref().map(|names| parse_built_in_tools(names));
             let completion_req = CompletionRequest {
                 messages: messages_for_llm,
                 tools: tools_for_req.clone(),
-                built_in_tools: None,
+                built_in_tools: built_in,
                 tool_config: None,
                 options: Some(RequestOptions {
-                    max_tokens: Some(4096),
+                    temperature: req.temperature,
+                    max_tokens: Some(req.max_tokens.unwrap_or(4096)),
+                    top_p: req.top_p,
                     ..Default::default()
                 }),
             };
@@ -585,6 +676,23 @@ pub async fn chat_stream(
                 total_completion_tokens += resp.usage.completion_tokens;
                 final_model = resp.model.clone();
                 final_finish_reason = format!("{:?}", resp.finish_reason);
+
+                // Capture rich response fields (overwritten each iteration; last one wins)
+                if let Some(ref gm) = resp.grounding_metadata {
+                    final_grounding = serde_json::to_value(gm).ok();
+                }
+                if let Some(ref ce) = resp.code_execution_results {
+                    final_code_execution = serde_json::to_value(ce).ok();
+                }
+                if let Some(ref ci) = resp.citations {
+                    final_citations = serde_json::to_value(ci).ok();
+                }
+                if let Some(ref rs) = resp.reasoning_summary {
+                    final_reasoning_summary = Some(rs.clone());
+                }
+                if let Some(ref mw) = resp.google_maps_widget_token {
+                    final_maps_widget = Some(mw.clone());
+                }
             }
 
             // Check if the LLM wants to call tools
@@ -721,20 +829,56 @@ pub async fn chat_stream(
             tracing::info!("Tool loop iteration {iteration} complete, starting next LLM call");
         }
 
+        // Emit rich response metadata events (if present)
+        if let Some(ref grounding) = final_grounding {
+            let event = json!({ "type": "grounding_metadata", "data": grounding });
+            yield Ok(Event::default().data(event.to_string()));
+        }
+        if let Some(ref code_exec) = final_code_execution {
+            let event = json!({ "type": "code_execution", "data": code_exec });
+            yield Ok(Event::default().data(event.to_string()));
+        }
+        if let Some(ref citations) = final_citations {
+            let event = json!({ "type": "citations", "data": citations });
+            yield Ok(Event::default().data(event.to_string()));
+        }
+        if let Some(ref summary) = final_reasoning_summary {
+            let event = json!({ "type": "reasoning_summary", "data": { "summary": summary } });
+            yield Ok(Event::default().data(event.to_string()));
+        }
+        if let Some(ref token) = final_maps_widget {
+            let event = json!({ "type": "maps_widget", "data": { "token": token } });
+            yield Ok(Event::default().data(event.to_string()));
+        }
+
         // Send final done event with aggregated usage
-        let done = json!({
-            "type": "done",
-            "data": {
-                "model": final_model,
-                "usage": {
-                    "prompt_tokens": total_prompt_tokens,
-                    "completion_tokens": total_completion_tokens,
-                    "total_tokens": total_prompt_tokens + total_completion_tokens,
-                },
-                "finish_reason": final_finish_reason,
-                "tool_uses": final_tool_uses,
-            }
+        let mut done_data = json!({
+            "model": final_model,
+            "usage": {
+                "prompt_tokens": total_prompt_tokens,
+                "completion_tokens": total_completion_tokens,
+                "total_tokens": total_prompt_tokens + total_completion_tokens,
+            },
+            "finish_reason": final_finish_reason,
+            "tool_uses": final_tool_uses,
         });
+        // Include rich metadata in done event for clients that only process done
+        if let Some(ref grounding) = final_grounding {
+            done_data["grounding_metadata"] = grounding.clone();
+        }
+        if let Some(ref code_exec) = final_code_execution {
+            done_data["code_execution"] = code_exec.clone();
+        }
+        if let Some(ref citations) = final_citations {
+            done_data["citations"] = citations.clone();
+        }
+        if let Some(ref summary) = final_reasoning_summary {
+            done_data["reasoning_summary"] = json!(summary);
+        }
+        if let Some(ref token) = final_maps_widget {
+            done_data["maps_widget_token"] = json!(token);
+        }
+        let done = json!({ "type": "done", "data": done_data });
         yield Ok(Event::default().data(done.to_string()));
     };
 
