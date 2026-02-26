@@ -344,7 +344,8 @@ pub(super) async fn stream(
     let mut builder = CreateResponseArgs::default();
     builder
         .model(&config.model)
-        .input(input);
+        .input(input)
+        .stream(true); // Required: async-openai's create_stream skips auto-setting this when the `byot` feature is enabled (included via `full`)
 
     // Include encrypted reasoning content for multi-turn tool calls with reasoning models (GPT-5.2-pro, o1, o3)
     // This is required for stateless multi-turn conversations - only for reasoning models
