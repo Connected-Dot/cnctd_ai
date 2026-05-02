@@ -75,36 +75,45 @@ impl Client {
         &self,
         request: crate::request::CompletionRequest,
     ) -> Result<crate::response::CompletionResponse> {
-        match &self.provider {
-            ProviderType::Anthropic { config } => {
-                anthropic::complete(config, &request).await
+        let policy = &self.options.retry_policy;
+        let provider = &self.provider;
+        let request_ref = &request;
+        crate::retry::with_retry(policy, move || async move {
+            match provider {
+                ProviderType::Anthropic { config } => {
+                    anthropic::complete(config, request_ref).await
+                }
+                ProviderType::OpenAi { sdk_client, config } => {
+                    // Use Responses API for all OpenAI models
+                    openai_responses::complete(sdk_client, config, request_ref).await
+                }
+                ProviderType::Gemini { config } => gemini::complete(config, request_ref).await,
             }
-            ProviderType::OpenAi { sdk_client, config } => {
-                // Use Responses API for all OpenAI models
-                openai_responses::complete(sdk_client, config, &request).await
-            }
-            ProviderType::Gemini { config } => {
-                gemini::complete(config, &request).await
-            }
-        }
+        })
+        .await
     }
 
+    /// Open a streaming completion. The initial connection is retried per the configured
+    /// `RetryPolicy`; once the stream is returned, mid-stream errors propagate without
+    /// retry (resumption requires server-side stream replay, not yet supported).
     pub async fn complete_stream(
         &self,
         request: crate::request::CompletionRequest,
     ) -> Result<crate::stream::CompletionStream> {
-        match &self.provider {
-            ProviderType::Anthropic { config } => {
-                anthropic::stream(config, &request).await
+        let policy = &self.options.retry_policy;
+        let provider = &self.provider;
+        let request_ref = &request;
+        crate::retry::with_retry(policy, move || async move {
+            match provider {
+                ProviderType::Anthropic { config } => anthropic::stream(config, request_ref).await,
+                ProviderType::OpenAi { sdk_client, config } => {
+                    // Use Responses API for all OpenAI models
+                    openai_responses::stream(sdk_client, config, request_ref).await
+                }
+                ProviderType::Gemini { config } => gemini::stream(config, request_ref).await,
             }
-            ProviderType::OpenAi { sdk_client, config } => {
-                // Use Responses API for all OpenAI models
-                openai_responses::stream(sdk_client, config, &request).await
-            }
-            ProviderType::Gemini { config } => {
-                gemini::stream(config, &request).await
-            }
-        }
+        })
+        .await
     }
 
     // =========================================================================

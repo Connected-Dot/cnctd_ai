@@ -3,6 +3,7 @@ pub mod client;
 pub mod request;
 pub mod response;
 pub mod message;
+pub mod retry;
 pub mod stream;
 pub mod tool;
 pub mod mcp;
@@ -33,6 +34,7 @@ pub use response::{
     CodeExecutionResult, CodeExecutionOutcome,
     Citation,
 };
+pub use retry::{RetryPolicy, with_retry};
 pub use stream::{CompletionStream, StreamChunk, ToolUseEvent};
 pub use tool_helpers::{create_tool, create_tool_borrowed};
 

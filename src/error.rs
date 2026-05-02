@@ -149,6 +149,58 @@ impl Error {
         // Fallback to generic Gemini error
         Error::GeminiError(error_msg)
     }
+
+    /// Returns true when the error represents a transient condition that may succeed on retry.
+    ///
+    /// Used by [`crate::retry::with_retry`] to decide whether to back off and try again.
+    /// Conservative — only clear transient signals (rate limits, 5xx, network failures,
+    /// stream inactivity) are retryable. Application-level errors (auth, bad request,
+    /// schema violations, tool failures) propagate immediately.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Error::RateLimited { .. } => true,
+            Error::ProviderError {
+                status_code: Some(code),
+                ..
+            } => *code >= 500,
+            Error::ProviderError {
+                status_code: None, ..
+            } => false,
+            Error::NetworkError(_) => true,
+            Error::Network(_) => true,
+            Error::StreamInactivityTimeout { .. } => true,
+            Error::AnthropicError(msg) | Error::GeminiError(msg) => has_transient_marker(msg),
+            // async-openai wraps status codes opaquely; conservative default. Specific
+            // OpenAI 5xx errors should arrive as ProviderError with a status_code via
+            // openai_responses::stream's error mapping.
+            Error::OpenAiError(_) => false,
+
+            Error::AuthenticationFailed(_) => false,
+            Error::InvalidRequest(_) => false,
+            Error::Parse(_) => false,
+            Error::JsonError(_) => false,
+            Error::ToolExecution(_) => false,
+            Error::UnsupportedOperation(_) => false,
+            Error::AudioTooLarge { .. } => false,
+            Error::UnsupportedAudioFormat(_) => false,
+            Error::IoError(_) => false,
+            Error::WebSocketError(_) => false,
+            Error::RealtimeSessionClosed => false,
+            Error::Other(_) => false,
+        }
+    }
+}
+
+fn has_transient_marker(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    lower.contains("overloaded")
+        || lower.contains("internal server error")
+        || lower.contains("temporarily unavailable")
+        || lower.contains("timeout")
+        || lower.contains("502")
+        || lower.contains("503")
+        || lower.contains("504")
+        || lower.contains("529")
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
