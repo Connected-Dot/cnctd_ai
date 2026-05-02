@@ -62,7 +62,15 @@ pub struct CompletionStream {
     pending_call_ids: std::collections::HashMap<String, String>,
     /// Reasoning items that must be echoed back in continuation requests (GPT-5.2-pro)
     reasoning_items: Vec<serde_json::Value>,
+    /// If set, abort with `Error::StreamInactivityTimeout` when no chunk is yielded
+    /// within this duration. Default: 90s. Set to `None` via `with_inactivity_timeout(None)` to disable.
+    inactivity_timeout: Option<std::time::Duration>,
+    /// Once a terminal condition (timeout) fires, subsequent `next()` calls return `None`.
+    terminated: bool,
 }
+
+/// Default inactivity timeout applied to every new `CompletionStream`.
+const DEFAULT_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 impl CompletionStream {
     /// Create a new stream from a raw HTTP byte stream (custom implementation)
@@ -88,6 +96,8 @@ impl CompletionStream {
             pending_function_names: std::collections::HashMap::new(),
             pending_call_ids: std::collections::HashMap::new(),
             reasoning_items: Vec::new(),
+            inactivity_timeout: Some(DEFAULT_INACTIVITY_TIMEOUT),
+            terminated: false,
         }
     }
 
@@ -109,6 +119,8 @@ impl CompletionStream {
             pending_function_names: std::collections::HashMap::new(),
             pending_call_ids: std::collections::HashMap::new(),
             reasoning_items: Vec::new(),
+            inactivity_timeout: Some(DEFAULT_INACTIVITY_TIMEOUT),
+            terminated: false,
         }
     }
 
@@ -131,6 +143,8 @@ impl CompletionStream {
             pending_function_names: std::collections::HashMap::new(),
             pending_call_ids: std::collections::HashMap::new(),
             reasoning_items: Vec::new(),
+            inactivity_timeout: Some(DEFAULT_INACTIVITY_TIMEOUT),
+            terminated: false,
         }
     }
 
@@ -154,11 +168,49 @@ impl CompletionStream {
             pending_function_names: std::collections::HashMap::new(),
             pending_call_ids: std::collections::HashMap::new(),
             reasoning_items: Vec::new(),
+            inactivity_timeout: Some(DEFAULT_INACTIVITY_TIMEOUT),
+            terminated: false,
         }
     }
 
-    /// Get the next chunk from the stream
+    /// Override the per-chunk inactivity timeout.
+    ///
+    /// Pass `Some(duration)` to set a custom window, or `None` to disable the timeout
+    /// entirely. By default, every stream is constructed with a 90s timeout — if no
+    /// chunk arrives within that window, `next()` yields `Error::StreamInactivityTimeout`
+    /// and the stream becomes terminal (subsequent calls return `None`).
+    pub fn with_inactivity_timeout(mut self, timeout: Option<std::time::Duration>) -> Self {
+        self.inactivity_timeout = timeout;
+        self
+    }
+
+    /// Get the next chunk from the stream.
+    ///
+    /// Returns `None` once the stream has ended (or a previous call hit an inactivity
+    /// timeout). When `inactivity_timeout` is set, each `next()` call is bounded by that
+    /// duration; if the underlying provider goes silent, the stream terminates with
+    /// `Error::StreamInactivityTimeout`.
     pub async fn next(&mut self) -> Option<Result<StreamChunk, crate::error::Error>> {
+        if self.terminated {
+            return None;
+        }
+        match self.inactivity_timeout {
+            Some(timeout) => match tokio::time::timeout(timeout, self.next_inner()).await {
+                Ok(result) => result,
+                Err(_) => {
+                    self.terminated = true;
+                    Some(Err(crate::error::Error::StreamInactivityTimeout {
+                        elapsed_ms: timeout.as_millis() as u64,
+                    }))
+                }
+            },
+            None => self.next_inner().await,
+        }
+    }
+
+    /// Inner stream-pump loop. Public callers go through `next()` which adds the
+    /// inactivity-timeout wrapper.
+    async fn next_inner(&mut self) -> Option<Result<StreamChunk, crate::error::Error>> {
         loop {
             match &mut self.inner {
                 StreamType::AnthropicCustom(stream) => {
@@ -949,4 +1001,50 @@ enum StreamType {
             >
         >
     ),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// A stream that hangs forever wedges `next()` until the inactivity timeout fires.
+    /// Verifies the timeout path returns `StreamInactivityTimeout` and marks the stream
+    /// terminal so subsequent calls return `None`.
+    #[tokio::test]
+    async fn inactivity_timeout_fires_and_terminates_stream() {
+        let pending = futures::stream::pending::<Result<bytes::Bytes, reqwest::Error>>();
+        let mut stream = CompletionStream::anthropic_custom(pending, "test-model".to_string())
+            .with_inactivity_timeout(Some(Duration::from_millis(50)));
+
+        let started = std::time::Instant::now();
+        let first = stream.next().await;
+        let elapsed = started.elapsed();
+
+        match first {
+            Some(Err(crate::error::Error::StreamInactivityTimeout { elapsed_ms })) => {
+                assert_eq!(elapsed_ms, 50);
+            }
+            other => panic!("expected StreamInactivityTimeout, got {:?}", other),
+        }
+        assert!(elapsed >= Duration::from_millis(50));
+        assert!(elapsed < Duration::from_secs(1), "timeout should fire promptly, took {:?}", elapsed);
+
+        // After timeout, the stream is terminal — subsequent calls return None.
+        assert!(stream.next().await.is_none());
+    }
+
+    /// With the timeout disabled, a hung stream stays hung — verify by racing it
+    /// against a short outer timeout that should win.
+    #[tokio::test]
+    async fn inactivity_timeout_can_be_disabled() {
+        let pending = futures::stream::pending::<Result<bytes::Bytes, reqwest::Error>>();
+        let mut stream = CompletionStream::anthropic_custom(pending, "test-model".to_string())
+            .with_inactivity_timeout(None);
+
+        // Race the stream against an outer 100ms timeout. The outer timeout should fire first
+        // because we disabled the inner one.
+        let outer = tokio::time::timeout(Duration::from_millis(100), stream.next()).await;
+        assert!(outer.is_err(), "outer timeout should fire before inner (which is disabled)");
+    }
 }

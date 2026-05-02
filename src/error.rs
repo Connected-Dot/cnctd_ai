@@ -8,50 +8,48 @@ pub enum Error {
         message: String,
         status_code: Option<u16>,
     },
-    
+
     #[error("Invalid request: {0}")]
     InvalidRequest(String),
-    
+
     #[error("Rate limited: retry after {retry_after:?}")]
-    RateLimited { 
-        retry_after: Option<Duration> 
-    },
-    
+    RateLimited { retry_after: Option<Duration> },
+
+    #[error("Stream inactivity timeout: no chunks received in {elapsed_ms}ms")]
+    StreamInactivityTimeout { elapsed_ms: u64 },
+
     #[error("Authentication failed: {0}")]
     AuthenticationFailed(String),
-    
+
     #[error("Network error: {0}")]
     NetworkError(#[from] reqwest::Error),
-    
+
     #[error("Network error: {0}")]
     Network(String),
-    
+
     #[error("Parse error: {0}")]
     Parse(String),
-    
+
     #[error("Tool execution error: {0}")]
     ToolExecution(String),
-    
+
     #[error("Anthropic SDK error: {0}")]
     AnthropicError(String),
-    
+
     #[error("OpenAI SDK error: {0}")]
     OpenAiError(#[from] async_openai::error::OpenAIError),
-    
+
     #[error("Gemini API error: {0}")]
     GeminiError(String),
-    
+
     #[error("JSON error: {0}")]
     JsonError(#[from] serde_json::Error),
-    
+
     #[error("Unsupported operation: {0}")]
     UnsupportedOperation(String),
 
     #[error("Audio file too large: {size_bytes} bytes (max: {max_bytes} bytes)")]
-    AudioTooLarge {
-        size_bytes: u64,
-        max_bytes: u64,
-    },
+    AudioTooLarge { size_bytes: u64, max_bytes: u64 },
 
     #[error("Unsupported audio format: {0}")]
     UnsupportedAudioFormat(String),
@@ -78,27 +76,28 @@ impl Error {
         // "Resource not found: model: invalid-model-name"
         // "Bad request: messages: at least one message is required"
         // "HTTP 401: {\"error\": {...}}"
-        
+
         // Check for authentication errors
-        if error_msg.to_lowercase().contains("authentication failed") 
+        if error_msg.to_lowercase().contains("authentication failed")
             || error_msg.to_lowercase().contains("invalid x-api-key")
-            || error_msg.contains("401") {
+            || error_msg.contains("401")
+        {
             return Error::AuthenticationFailed(error_msg);
         }
-        
+
         // Check for rate limiting
-        if error_msg.to_lowercase().contains("rate limit") 
-            || error_msg.contains("429") {
+        if error_msg.to_lowercase().contains("rate limit") || error_msg.contains("429") {
             return Error::RateLimited { retry_after: None };
         }
-        
+
         // Check for validation errors
-        if error_msg.to_lowercase().contains("bad request") 
-            || error_msg.to_lowercase().contains("invalid") 
-            || error_msg.contains("400") {
+        if error_msg.to_lowercase().contains("bad request")
+            || error_msg.to_lowercase().contains("invalid")
+            || error_msg.contains("400")
+        {
             return Error::InvalidRequest(error_msg);
         }
-        
+
         // Extract HTTP status code if present
         let status_code = if let Some(pos) = error_msg.find("HTTP ") {
             let status_str = &error_msg[pos + 5..];
@@ -110,7 +109,7 @@ impl Error {
         } else {
             None
         };
-        
+
         // Return as ProviderError with extracted status code
         if let Some(code) = status_code {
             Error::ProviderError {
@@ -123,29 +122,30 @@ impl Error {
             Error::AnthropicError(error_msg)
         }
     }
-    
+
     /// Parse a Gemini error string to classify error type
     pub fn from_gemini_error(error_msg: String) -> Self {
         // Check for authentication errors
         if error_msg.to_lowercase().contains("api key")
             || error_msg.contains("401")
-            || error_msg.contains("403") {
+            || error_msg.contains("403")
+        {
             return Error::AuthenticationFailed(error_msg);
         }
-        
+
         // Check for rate limiting
         if error_msg.to_lowercase().contains("rate limit")
             || error_msg.to_lowercase().contains("quota")
-            || error_msg.contains("429") {
+            || error_msg.contains("429")
+        {
             return Error::RateLimited { retry_after: None };
         }
-        
+
         // Check for validation errors
-        if error_msg.to_lowercase().contains("invalid")
-            || error_msg.contains("400") {
+        if error_msg.to_lowercase().contains("invalid") || error_msg.contains("400") {
             return Error::InvalidRequest(error_msg);
         }
-        
+
         // Fallback to generic Gemini error
         Error::GeminiError(error_msg)
     }
