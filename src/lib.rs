@@ -1,4 +1,5 @@
 pub mod error;
+pub mod agent_loop;
 pub mod client;
 pub mod request;
 pub mod response;
@@ -33,6 +34,10 @@ pub use response::{
     GroundingMetadata, GroundingChunk, GroundingSupport, WebChunk, SearchEntryPoint,
     CodeExecutionResult, CodeExecutionOutcome,
     Citation,
+};
+pub use agent_loop::{
+    LoopConfig, LoopHandler, LoopResult, StopReason as AgentStopReason, ToolExecResult,
+    ToolExecutor, run_agent_loop,
 };
 pub use retry::{RetryPolicy, with_retry};
 pub use stream::{CompletionStream, StreamChunk, ToolUseEvent};
