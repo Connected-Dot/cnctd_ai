@@ -28,6 +28,7 @@
 
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::message::Message;
@@ -108,6 +109,10 @@ pub enum StopReason {
     ToolErrors(String),
     /// Provider call (post-retry) failed terminally.
     ProviderError(String),
+    /// `LoopConfig::should_continue` returned `false` — consumer asked the
+    /// loop to halt at the next turn boundary. Used by autonomous-task
+    /// agents to honor cooperative cancellation requests.
+    Aborted,
 }
 
 /// Final result of the loop. Carries the accumulated assistant text and the
@@ -122,7 +127,7 @@ pub struct LoopResult {
 }
 
 /// Loop tunables. Defaults match transmit-ai conventions.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LoopConfig {
     /// Hard cap on turns to prevent infinite loops. Each "turn" is one
     /// provider call + its tool execution round.
@@ -130,6 +135,24 @@ pub struct LoopConfig {
     /// If a single tool errors this many times in a row, force a wrap-up
     /// response instead of looping further. `0` disables the check.
     pub max_consecutive_tool_errors: u32,
+    /// Optional consumer-supplied gate, polled at the top of each turn.
+    /// Return `false` to stop the loop gracefully (surfaces as
+    /// `StopReason::Aborted`). Used by autonomous-task agents to honor
+    /// cooperative cancellation; chat doesn't need it.
+    pub should_continue: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+}
+
+impl std::fmt::Debug for LoopConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoopConfig")
+            .field("max_turns", &self.max_turns)
+            .field("max_consecutive_tool_errors", &self.max_consecutive_tool_errors)
+            .field(
+                "should_continue",
+                &self.should_continue.as_ref().map(|_| "<fn>"),
+            )
+            .finish()
+    }
 }
 
 impl Default for LoopConfig {
@@ -137,6 +160,7 @@ impl Default for LoopConfig {
         Self {
             max_turns: 10,
             max_consecutive_tool_errors: 2,
+            should_continue: None,
         }
     }
 }
@@ -174,6 +198,16 @@ where
                 final_response: last_response,
                 accumulated_text,
             });
+        }
+        if let Some(check) = &config.should_continue {
+            if !check() {
+                return Ok(LoopResult {
+                    stop_reason: StopReason::Aborted,
+                    iterations: iteration,
+                    final_response: last_response,
+                    accumulated_text,
+                });
+            }
         }
         iteration += 1;
 
