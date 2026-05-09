@@ -140,6 +140,16 @@ pub struct LoopConfig {
     /// `StopReason::Aborted`). Used by autonomous-task agents to honor
     /// cooperative cancellation; chat doesn't need it.
     pub should_continue: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+    /// The active model's context window in tokens. When set together with
+    /// `default_tool_result_max_chars`, the loop truncates tool outputs
+    /// progressively as the prompt fills up — the goal is to keep multi-turn
+    /// runs from blowing through the context limit when tools return long
+    /// outputs. `None` disables the scaling (tools go through full-size).
+    pub context_window: Option<u32>,
+    /// Per-tool output cap that's used when context utilization is below 50%.
+    /// Above 50%, the cap scales down toward 5K linearly through 70%, then
+    /// hits a hard 5K floor. Default 50K.
+    pub default_tool_result_max_chars: usize,
 }
 
 impl std::fmt::Debug for LoopConfig {
@@ -151,6 +161,8 @@ impl std::fmt::Debug for LoopConfig {
                 "should_continue",
                 &self.should_continue.as_ref().map(|_| "<fn>"),
             )
+            .field("context_window", &self.context_window)
+            .field("default_tool_result_max_chars", &self.default_tool_result_max_chars)
             .finish()
     }
 }
@@ -161,8 +173,56 @@ impl Default for LoopConfig {
             max_turns: 10,
             max_consecutive_tool_errors: 2,
             should_continue: None,
+            context_window: None,
+            default_tool_result_max_chars: 50_000,
         }
     }
+}
+
+/// Hard floor for tool-output truncation when the prompt is past 70%
+/// utilization. Tool outputs are clipped to this no matter what
+/// `default_tool_result_max_chars` is set to.
+const TRUNCATION_HARD_FLOOR: usize = 5_000;
+
+/// Compute the per-tool output character cap given the current prompt-token
+/// utilization (input_tokens / context_window) and the configured base.
+///
+/// - `utilization < 0.50`: use `base_max` as-is (no scaling)
+/// - `0.50 ≤ utilization < 0.70`: linear scale from `base_max` at 0.50 down
+///   to `0.25 * base_max` at 0.70
+/// - `utilization ≥ 0.70`: hard floor at 5K (or `base_max` if smaller)
+fn scale_truncation_limit(utilization: f64, base_max: usize) -> usize {
+    let floor = TRUNCATION_HARD_FLOOR.min(base_max);
+    if utilization >= 0.70 {
+        return floor;
+    }
+    if utilization < 0.50 {
+        return base_max;
+    }
+    let ratio = (utilization - 0.50) / 0.20; // 0.0 at 0.50, 1.0 at 0.70
+    let multiplier = 1.0 - (0.75 * ratio); // 1.0 at 0.50, 0.25 at 0.70
+    let scaled = (base_max as f64 * multiplier) as usize;
+    scaled.max(floor)
+}
+
+/// Truncate a tool output to `max_chars`, appending a [truncated] notice if
+/// it was over the limit. No-op when the output already fits.
+fn truncate_tool_output(output: String, max_chars: usize) -> String {
+    if output.len() <= max_chars {
+        return output;
+    }
+    let original_len = output.len();
+    // Char-boundary safe truncation
+    let mut end = max_chars;
+    while end > 0 && !output.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut truncated = output[..end].to_string();
+    truncated.push_str(&format!(
+        "\n\n[truncated: original output was {} chars, kept first {}]",
+        original_len, end
+    ));
+    truncated
 }
 
 /// Run the agent loop until the model wraps up, an error fires, or a limit
@@ -189,6 +249,12 @@ where
     let mut last_response: Option<CompletionResponse> = None;
     let mut iteration: u32 = 0;
     let mut wrap_up_only = false;
+    // Tracked across turns to compute context utilization for tool-output
+    // truncation (B6 dynamic scaling). The provider's prompt_tokens for the
+    // *previous* turn estimates the size of the prompt going into the *next*
+    // turn (history grows monotonically); we use that to scale tool output
+    // limits before re-feeding tool_result messages to the model.
+    let mut last_prompt_tokens: Option<u32> = None;
 
     loop {
         if iteration >= config.max_turns {
@@ -286,6 +352,7 @@ where
         };
 
         let stop_reason = response.finish_reason.clone();
+        last_prompt_tokens = Some(response.usage.prompt_tokens);
         last_response = Some(response.clone());
 
         // No tool calls (or wrap-up turn) — model is done.
@@ -305,6 +372,17 @@ where
         // Append the assistant turn (with its tool_use blocks) to the history
         // so subsequent turns see the right round-trip shape.
         request.messages.push(response.message.clone());
+
+        // B6 dynamic truncation: as the prompt fills up the model's window,
+        // shrink per-tool output caps so the next turn doesn't blow through
+        // the limit. Computed once per round from the response we just got.
+        let max_chars = match (last_prompt_tokens, config.context_window) {
+            (Some(used), Some(window)) if window > 0 => {
+                let utilization = used as f64 / window as f64;
+                scale_truncation_limit(utilization, config.default_tool_result_max_chars)
+            }
+            _ => config.default_tool_result_max_chars,
+        };
 
         let mut tool_results = Vec::new();
         for tu in &tool_uses {
@@ -326,7 +404,8 @@ where
                 consecutive_errors.remove(&tu.name);
             }
 
-            tool_results.push((tu.id.clone(), result.output.clone()));
+            let truncated = truncate_tool_output(result.output.clone(), max_chars);
+            tool_results.push((tu.id.clone(), truncated));
         }
 
         // Feed tool results back as the next user-side message and loop.
@@ -392,6 +471,67 @@ mod tests {
         let cfg = LoopConfig::default();
         assert_eq!(cfg.max_turns, 10);
         assert_eq!(cfg.max_consecutive_tool_errors, 2);
+        assert!(cfg.context_window.is_none());
+        assert_eq!(cfg.default_tool_result_max_chars, 50_000);
+    }
+
+    #[test]
+    fn truncation_no_op_below_50_pct() {
+        // 0%, 25%, 49% utilization → full base_max
+        for u in [0.0, 0.25, 0.49] {
+            assert_eq!(scale_truncation_limit(u, 50_000), 50_000);
+        }
+    }
+
+    #[test]
+    fn truncation_scales_linearly_50_to_70_pct() {
+        // At 50%: full base. At 60%: midpoint between 100% and 25%, so 62.5%.
+        // At 70%: 25% of base.
+        assert_eq!(scale_truncation_limit(0.50, 50_000), 50_000);
+        let mid = scale_truncation_limit(0.60, 50_000);
+        // 50_000 * (1.0 - 0.75 * 0.5) = 50_000 * 0.625 = 31_250
+        assert_eq!(mid, 31_250);
+        let near_high = scale_truncation_limit(0.69, 50_000);
+        assert!(near_high > 12_500 && near_high < 16_000);
+    }
+
+    #[test]
+    fn truncation_hard_floor_above_70_pct() {
+        for u in [0.70, 0.80, 0.95, 1.0] {
+            assert_eq!(
+                scale_truncation_limit(u, 50_000),
+                TRUNCATION_HARD_FLOOR
+            );
+        }
+    }
+
+    #[test]
+    fn truncation_floor_capped_by_base_max() {
+        // If base_max is smaller than the hard floor, we don't expand to floor.
+        assert_eq!(scale_truncation_limit(0.95, 1_000), 1_000);
+    }
+
+    #[test]
+    fn truncate_tool_output_no_op_when_short() {
+        let s = truncate_tool_output("hello".to_string(), 100);
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn truncate_tool_output_clips_and_annotates() {
+        let s = truncate_tool_output("0123456789abcdef".to_string(), 8);
+        assert!(s.starts_with("01234567"));
+        assert!(s.contains("[truncated"));
+        assert!(s.contains("16 chars"));
+    }
+
+    #[test]
+    fn truncate_tool_output_respects_char_boundaries() {
+        // Multi-byte char at boundary
+        let s = truncate_tool_output("aaaa🔥bbbb".to_string(), 5);
+        // The fire emoji is 4 bytes; truncating at 5 should fall back to 4.
+        assert!(s.starts_with("aaaa"));
+        assert!(s.contains("[truncated"));
     }
 
     // Note: full integration tests against a fake `Client` would require a
