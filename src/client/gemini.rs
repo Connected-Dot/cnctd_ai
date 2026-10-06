@@ -398,6 +398,7 @@ pub(crate) fn parse_usage(usage_data: &Value) -> Usage {
             .get("cachedContentTokenCount")
             .and_then(Value::as_u64)
             .map(|v| v as u32),
+        cache_creation_1h_tokens: None,
     }
 }
 

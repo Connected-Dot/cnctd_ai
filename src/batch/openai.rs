@@ -319,6 +319,7 @@ fn parse_completion_from_body(body: &serde_json::Value) -> Result<crate::respons
         total_tokens: prompt_tokens + completion_tokens,
         cache_creation_tokens: None,
         cache_read_tokens: None,
+        cache_creation_1h_tokens: None,
     };
 
     // Parse tool calls if present

@@ -222,6 +222,7 @@ impl CompletionStream {
                                     total_tokens: usage.total_tokens,
                                     cache_creation_tokens: None, // OpenAI doesn't expose cache tokens
                                     cache_read_tokens: None,
+                                    cache_creation_1h_tokens: None,
                                 });
                                 has_usage_update = true;
                             }
@@ -554,15 +555,8 @@ impl CompletionStream {
                     crate::response::FinishReason::Stop
                 });
                 
-                // Extract usage if present
-                if let Some(usage) = e.response.usage {
-                    self.usage = Some(crate::response::Usage {
-                        prompt_tokens: usage.input_tokens,
-                        completion_tokens: usage.output_tokens,
-                        total_tokens: usage.total_tokens,
-                        cache_creation_tokens: None, // OpenAI doesn't expose cache tokens
-                        cache_read_tokens: None,
-                    });
+                if let Some(usage) = &e.response.usage {
+                    self.usage = Some(crate::client::openai_responses::usage_from(usage));
                 }
                 
                 Some(StreamChunk {
@@ -581,13 +575,7 @@ impl CompletionStream {
             }
             ResponseStreamEvent::ResponseIncomplete(e) => {
                 if let Some(usage) = &e.response.usage {
-                    self.usage = Some(crate::response::Usage {
-                        prompt_tokens: usage.input_tokens,
-                        completion_tokens: usage.output_tokens,
-                        total_tokens: usage.total_tokens,
-                        cache_creation_tokens: None,
-                        cache_read_tokens: None,
-                    });
+                    self.usage = Some(crate::client::openai_responses::usage_from(usage));
                 }
                 let reason = e
                     .response
@@ -655,18 +643,7 @@ impl CompletionStream {
 
         match event_type {
             "message_start" => {
-                if let Some(usage) = data["message"]["usage"].as_object() {
-                    let input_tokens = usage["input_tokens"].as_u64().unwrap_or(0) as u32;
-                    let output_tokens = usage["output_tokens"].as_u64().unwrap_or(0) as u32;
-                    let count = |key: &str| usage.get(key).and_then(|v| v.as_u64()).map(|v| v as u32);
-                    self.usage = Some(crate::response::Usage {
-                        prompt_tokens: input_tokens,
-                        completion_tokens: output_tokens,
-                        total_tokens: input_tokens + output_tokens,
-                        cache_creation_tokens: count("cache_creation_input_tokens"),
-                        cache_read_tokens: count("cache_read_input_tokens"),
-                    });
-                }
+                self.usage = Some(crate::client::anthropic::parse_usage(data["message"].get("usage")));
                 Some(None)
             }
             "content_block_start" => {
@@ -763,10 +740,21 @@ impl CompletionStream {
                 }))
             }
             "message_delta" => {
-                if let Some(output_tokens) = data["usage"]["output_tokens"].as_u64() {
-                    if let Some(existing_usage) = &mut self.usage {
-                        existing_usage.completion_tokens = output_tokens as u32;
-                        existing_usage.total_tokens = existing_usage.prompt_tokens + output_tokens as u32;
+                if let Some(usage) = data.get("usage").filter(|u| u.is_object()) {
+                    if usage.get("input_tokens").is_some() {
+                        // The final totals. They omit the 5m/1h split of the
+                        // cache writes, which only message_start carries.
+                        let mut totals = crate::client::anthropic::parse_usage(Some(usage));
+                        if totals.cache_creation_1h_tokens.is_none() {
+                            totals.cache_creation_1h_tokens =
+                                self.usage.as_ref().and_then(|u| u.cache_creation_1h_tokens);
+                        }
+                        self.usage = Some(totals);
+                    } else if let Some(output_tokens) = usage["output_tokens"].as_u64() {
+                        if let Some(existing_usage) = &mut self.usage {
+                            existing_usage.completion_tokens = output_tokens as u32;
+                            existing_usage.total_tokens = existing_usage.prompt_tokens + output_tokens as u32;
+                        }
                     }
                 }
                 if let Some(stop_reason) = data["delta"]["stop_reason"].as_str() {

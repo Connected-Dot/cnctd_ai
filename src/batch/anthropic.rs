@@ -482,6 +482,7 @@ fn convert_result_line(line: AnthropicBatchResultLine) -> BatchResult {
                     total_tokens: msg.usage.input_tokens + msg.usage.output_tokens,
                     cache_creation_tokens: None,
                     cache_read_tokens: None,
+                    cache_creation_1h_tokens: None,
                 },
                 finish_reason,
                 model: msg.model,

@@ -16,6 +16,16 @@ pub enum CacheControl {
     Extended,
 }
 
+impl CacheControl {
+    /// The Anthropic `cache_control` value for this TTL.
+    pub fn to_anthropic_json(&self) -> serde_json::Value {
+        match self {
+            CacheControl::Ephemeral => serde_json::json!({ "type": "ephemeral" }),
+            CacheControl::Extended => serde_json::json!({ "type": "ephemeral", "ttl": "1h" }),
+        }
+    }
+}
+
 /// Image content for vision-capable models
 /// Supports base64-encoded image data
 #[derive(Clone, Debug, Serialize, Deserialize)]

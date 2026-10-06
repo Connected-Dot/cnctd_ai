@@ -1,4 +1,7 @@
-use crate::{message::Message, Tool};
+use crate::{
+    message::{CacheControl, Message},
+    Tool,
+};
 use serde::{Deserialize, Serialize};
 
 /// Built-in tools provided by AI providers (not MCP tools)
@@ -401,4 +404,36 @@ pub struct RequestOptions {
     /// OpenAI native MCP server configuration
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp_servers: Option<Vec<McpServerConfig>>,
+
+    /// Where to place prompt-cache breakpoints beyond the ones messages
+    /// carry themselves (see [`PromptCache`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache: Option<PromptCache>,
+}
+
+/// Request-level prompt-cache breakpoints.
+///
+/// Anthropic caches explicitly: a breakpoint writes the prefix up to it, and a
+/// later request reads it when its prefix is byte-identical up to an earlier
+/// write (render order tools -> system -> messages, at most 4 breakpoints,
+/// 1-hour entries before 5-minute ones). System and conversation messages add
+/// their own breakpoints with [`Message::with_cache`](crate::Message::with_cache) /
+/// [`Message::with_extended_cache`](crate::Message::with_extended_cache).
+/// OpenAI and Gemini cache stable prefixes automatically and ignore the
+/// breakpoints; OpenAI uses [`key`](PromptCache::key) to route requests that
+/// share a prefix to the same cache.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PromptCache {
+    /// Breakpoint on the last tool definition: the tool list is the start of
+    /// the prompt and usually the largest stable part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<CacheControl>,
+    /// Breakpoint on the last block of the last message. Each call in a tool
+    /// loop then reads everything the previous call wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail: Option<CacheControl>,
+    /// OpenAI `prompt_cache_key`: requests with the same key and prefix land
+    /// on the same cache (a conversation or agent id works well).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }

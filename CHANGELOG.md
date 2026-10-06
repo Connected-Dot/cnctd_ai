@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-10-06
+
+Prompt caching that works end to end. Breaking: `Usage::prompt_tokens` now
+counts cached input on Anthropic, and public structs gain fields.
+
+### Added
+- **`RequestOptions::prompt_cache`** ([`PromptCache`]): a breakpoint on the
+  last tool definition (`tools`), one on the last block of the last message
+  (`tail`, which moves with each round of a tool loop), and an OpenAI
+  `prompt_cache_key` (`key`).
+- **1-hour cache entries**: `CacheControl::Extended` is now sent as
+  `{"type":"ephemeral","ttl":"1h"}` (it was sent as a 5-minute entry).
+- **`Usage::cache_creation_1h_tokens`**: the part of the cache writes billed
+  at the 1-hour rate.
+- `examples/live_cache_check.rs`: a two-turn chat with tool rounds on
+  Anthropic (explicit breakpoints) plus OpenAI and Gemini (automatic caching),
+  reporting reads and writes per call.
+
+### Changed
+- **`Usage::prompt_tokens` is every input token, cached or not**, on all
+  providers. Anthropic reports `input_tokens` without the cached parts; it is
+  now added up (OpenAI and Gemini already included them).
+  `effective_prompt_tokens()` is the uncached remainder.
+- Anthropic: every system message becomes its own system block carrying its
+  own breakpoint (a single unmarked system message is still a plain string).
+  A message's `cache_control` lands on its last block that can carry one
+  (tool results and replayed assistant turns included; never thinking blocks
+  or empty text). The request is normalized to the API's rules: at most four
+  breakpoints (the oldest message breakpoints go first, the last one always
+  stays) and no 1-hour entry after a 5-minute one.
+
+### Fixed
+- OpenAI cached input (`input_tokens_details.cached_tokens`) is now reported
+  as `cache_read_tokens` from Responses calls, streamed or not.
+- Streamed Anthropic usage keeps the cache figures from `message_start` when
+  `message_delta` brings the final totals.
+
 ## [0.2.0] - 2026-10-06
 
 Model-aware requests for the 2026 model generations (Claude Opus 5.5 /

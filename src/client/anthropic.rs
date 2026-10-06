@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use super::config::AnthropicConfig;
 use crate::error::Result;
-use crate::message::{ProviderContent, Role};
+use crate::message::{CacheControl, Message, ProviderContent, Role};
 use crate::request::{CompletionRequest, Effort, Thinking};
 use crate::response::{CompletionResponse, FinishReason, Refusal, Usage};
 use crate::stream::CompletionStream;
@@ -93,29 +93,48 @@ pub(crate) fn build_body(config: &AnthropicConfig, request: &CompletionRequest, 
         body["stream"] = json!(true);
     }
 
-    if let Some(system_msg) = request.messages.iter().find(|m| m.role == Role::System) {
-        if system_msg.cache_control.is_some() {
-            body["system"] = json!([{
-                "type": "text",
-                "text": system_msg.content,
-                "cache_control": { "type": "ephemeral" }
-            }]);
-        } else {
-            body["system"] = json!(system_msg.content);
+    // Every system message becomes one block, in order, carrying its own
+    // breakpoint. A single unmarked system message stays a plain string.
+    let system: Vec<&Message> = request
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::System && !m.content.is_empty())
+        .collect();
+    match system.as_slice() {
+        [] => {}
+        [only] if only.cache_control.is_none() => body["system"] = json!(only.content),
+        many => {
+            let blocks: Vec<Value> = many
+                .iter()
+                .map(|m| {
+                    let mut block = json!({ "type": "text", "text": m.content });
+                    if let Some(cc) = &m.cache_control {
+                        block["cache_control"] = cc.to_anthropic_json();
+                    }
+                    block
+                })
+                .collect();
+            body["system"] = json!(blocks);
         }
     }
 
     let mut messages = Vec::new();
     for msg in request.messages.iter().filter(|m| m.role != Role::System) {
-        match msg.role {
-            Role::User => messages.push(user_message(msg)),
-            Role::Assistant => {
-                if let Some(m) = assistant_message(msg) {
-                    messages.push(m);
-                }
+        let rendered = match msg.role {
+            Role::User => Some(user_message(msg)),
+            Role::Assistant => assistant_message(msg),
+            Role::System => None,
+        };
+        if let Some(mut rendered) = rendered {
+            if let Some(cc) = &msg.cache_control {
+                mark_last_block(&mut rendered, cc);
             }
-            Role::System => {}
+            messages.push(rendered);
         }
+    }
+    let prompt_cache = opts.and_then(|o| o.prompt_cache.as_ref());
+    if let (Some(cc), Some(last)) = (prompt_cache.and_then(|p| p.tail.as_ref()), messages.last_mut()) {
+        mark_last_block(last, cc);
     }
     body["messages"] = json!(messages);
 
@@ -131,6 +150,12 @@ pub(crate) fn build_body(config: &AnthropicConfig, request: &CompletionRequest, 
             })
             .collect();
         body["tools"] = json!(tools_json);
+        if let (Some(cc), Some(last)) = (
+            prompt_cache.and_then(|p| p.tools.as_ref()),
+            body["tools"].as_array_mut().and_then(|t| t.last_mut()),
+        ) {
+            last["cache_control"] = cc.to_anthropic_json();
+        }
     }
 
     if let Some(opts) = opts {
@@ -156,7 +181,82 @@ pub(crate) fn build_body(config: &AnthropicConfig, request: &CompletionRequest, 
         }
     }
 
+    normalize_breakpoints(&mut body);
     body
+}
+
+/// The most cache breakpoints one request may carry.
+const MAX_BREAKPOINTS: usize = 4;
+
+/// Put a breakpoint on a rendered message's last block that can carry one
+/// (thinking blocks and empty text cannot). String content becomes a text
+/// block first.
+fn mark_last_block(message: &mut Value, cc: &CacheControl) {
+    if let Some(text) = message["content"].as_str().map(String::from) {
+        if text.is_empty() {
+            return;
+        }
+        message["content"] = json!([{ "type": "text", "text": text }]);
+    }
+    let Some(blocks) = message["content"].as_array_mut() else {
+        return;
+    };
+    let target = blocks.iter_mut().rev().find(|b| {
+        match b.get("type").and_then(Value::as_str) {
+            Some("thinking") | Some("redacted_thinking") => false,
+            Some("text") => b.get("text").and_then(Value::as_str).is_some_and(|t| !t.is_empty()),
+            _ => true,
+        }
+    });
+    if let Some(block) = target {
+        block["cache_control"] = cc.to_anthropic_json();
+    }
+}
+
+/// Enforce the API's breakpoint rules so a request never 400s on them:
+/// at most four (the oldest message breakpoints go first, then the oldest
+/// overall; the last one always stays), and no 1-hour entry after a
+/// 5-minute one (a later 1-hour breakpoint drops to 5 minutes).
+fn normalize_breakpoints(body: &mut Value) {
+    let mut paths = Vec::new();
+    for (key, nested) in [("tools", false), ("system", false), ("messages", true)] {
+        let Some(items) = body[key].as_array() else { continue };
+        for (i, item) in items.iter().enumerate() {
+            if nested {
+                let Some(blocks) = item["content"].as_array() else { continue };
+                for (j, block) in blocks.iter().enumerate() {
+                    if block.get("cache_control").is_some() {
+                        paths.push(format!("/{key}/{i}/content/{j}"));
+                    }
+                }
+            } else if item.get("cache_control").is_some() {
+                paths.push(format!("/{key}/{i}"));
+            }
+        }
+    }
+
+    while paths.len() > MAX_BREAKPOINTS {
+        let last = paths.len() - 1;
+        let drop = paths[..last]
+            .iter()
+            .position(|p| p.starts_with("/messages/"))
+            .unwrap_or(0);
+        let path = paths.remove(drop);
+        if let Some(block) = body.pointer_mut(&path).and_then(Value::as_object_mut) {
+            block.remove("cache_control");
+        }
+    }
+
+    let mut seen_short = false;
+    for path in &paths {
+        let Some(cc) = body.pointer_mut(&format!("{path}/cache_control")) else { continue };
+        let long = cc.get("ttl").and_then(Value::as_str) == Some("1h");
+        if long && seen_short {
+            *cc = CacheControl::Ephemeral.to_anthropic_json();
+        } else if !long {
+            seen_short = true;
+        }
+    }
 }
 
 /// Anthropic's effort scale starts at `low`.
@@ -203,18 +303,14 @@ fn user_message(msg: &crate::message::Message) -> Value {
         if let Some(documents) = &msg.documents {
             for doc in documents {
                 if doc.media_type == "application/pdf" {
-                    let mut doc_block = json!({
+                    content_blocks.push(json!({
                         "type": "document",
                         "source": {
                             "type": "base64",
                             "media_type": doc.media_type,
                             "data": doc.data
                         }
-                    });
-                    if msg.cache_control.is_some() {
-                        doc_block["cache_control"] = json!({ "type": "ephemeral" });
-                    }
-                    content_blocks.push(doc_block);
+                    }));
                 } else if doc.media_type.starts_with("text/")
                     || doc.media_type == "application/json"
                     || doc.media_type == "application/xml"
@@ -257,25 +353,10 @@ fn user_message(msg: &crate::message::Message) -> Value {
         }
 
         if !msg.content.is_empty() {
-            let mut text_block = json!({ "type": "text", "text": msg.content.clone() });
-            if msg.cache_control.is_some() && msg.documents.is_none() {
-                text_block["cache_control"] = json!({ "type": "ephemeral" });
-            }
-            content_blocks.push(text_block);
+            content_blocks.push(json!({ "type": "text", "text": msg.content.clone() }));
         }
 
         return json!({ "role": "user", "content": content_blocks });
-    }
-
-    if msg.cache_control.is_some() {
-        return json!({
-            "role": "user",
-            "content": [{
-                "type": "text",
-                "text": msg.content.clone(),
-                "cache_control": { "type": "ephemeral" }
-            }]
-        });
     }
 
     json!({ "role": "user", "content": msg.content.clone() })
@@ -382,6 +463,32 @@ pub(crate) fn parse_refusal(stop_details: Option<&Value>) -> Refusal {
     }
 }
 
+/// Anthropic usage -> [`Usage`]. Anthropic's `input_tokens` excludes the
+/// cached parts; `Usage::prompt_tokens` counts every input token.
+pub(crate) fn parse_usage(usage: Option<&Value>) -> Usage {
+    let count = |key: &str| {
+        usage
+            .and_then(|u| u.get(key))
+            .and_then(Value::as_u64)
+            .map(|v| v as u32)
+    };
+    let read = count("cache_read_input_tokens");
+    let write = count("cache_creation_input_tokens");
+    let prompt_tokens = count("input_tokens").unwrap_or(0) + read.unwrap_or(0) + write.unwrap_or(0);
+    let completion_tokens = count("output_tokens").unwrap_or(0);
+    Usage {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens: prompt_tokens + completion_tokens,
+        cache_creation_tokens: write,
+        cache_read_tokens: read,
+        cache_creation_1h_tokens: usage
+            .and_then(|u| u.pointer("/cache_creation/ephemeral_1h_input_tokens"))
+            .and_then(Value::as_u64)
+            .map(|v| v as u32),
+    }
+}
+
 /// Parse a non-streaming Messages API response.
 pub(crate) fn parse_message(json: &Value, fallback_model: &str) -> CompletionResponse {
     let model = json
@@ -423,15 +530,7 @@ pub(crate) fn parse_message(json: &Value, fallback_model: &str) -> CompletionRes
     let refusal = (finish_reason == FinishReason::Refusal)
         .then(|| parse_refusal(json.get("stop_details")));
 
-    let usage = json.get("usage");
-    let count = |key: &str| {
-        usage
-            .and_then(|u| u.get(key))
-            .and_then(Value::as_u64)
-            .map(|v| v as u32)
-    };
-    let prompt_tokens = count("input_tokens").unwrap_or(0);
-    let completion_tokens = count("output_tokens").unwrap_or(0);
+    let usage = parse_usage(json.get("usage"));
 
     let tool_uses_opt = if tool_uses.is_empty() { None } else { Some(tool_uses) };
     let mut message = crate::message::Message::assistant(content);
@@ -446,13 +545,7 @@ pub(crate) fn parse_message(json: &Value, fallback_model: &str) -> CompletionRes
 
     CompletionResponse {
         message,
-        usage: Usage {
-            prompt_tokens,
-            completion_tokens,
-            total_tokens: prompt_tokens + completion_tokens,
-            cache_creation_tokens: count("cache_creation_input_tokens"),
-            cache_read_tokens: count("cache_read_input_tokens"),
-        },
+        usage,
         finish_reason,
         model,
         tool_uses: tool_uses_opt,
@@ -470,7 +563,7 @@ pub(crate) fn parse_message(json: &Value, fallback_model: &str) -> CompletionRes
 mod tests {
     use super::*;
     use crate::message::Message;
-    use crate::request::RequestOptions;
+    use crate::request::{PromptCache, RequestOptions};
 
     fn config(model: &str) -> AnthropicConfig {
         AnthropicConfig {
@@ -599,7 +692,136 @@ mod tests {
         assert_eq!(resp.finish_reason, FinishReason::ToolUse);
         assert_eq!(resp.tool_uses.as_ref().unwrap()[0].id, "t1");
         assert_eq!(resp.usage.cache_read_tokens, Some(3));
+        assert_eq!(resp.usage.prompt_tokens, 8);
         let pc = resp.message.provider_content.unwrap();
         assert_eq!(pc.blocks.len(), 2);
+    }
+
+    fn tool(name: &str) -> crate::Tool {
+        crate::tool_helpers::create_tool(name, "d", json!({ "type": "object", "properties": {} })).unwrap()
+    }
+
+    fn cached(messages: Vec<Message>) -> CompletionRequest {
+        CompletionRequest {
+            messages,
+            tools: Some(vec![tool("a"), tool("b")]),
+            built_in_tools: None,
+            tool_config: None,
+            options: Some(RequestOptions {
+                prompt_cache: Some(PromptCache {
+                    tools: Some(CacheControl::Extended),
+                    tail: Some(CacheControl::Ephemeral),
+                    key: None,
+                }),
+                ..Default::default()
+            }),
+        }
+    }
+
+    #[test]
+    fn chat_turn_breakpoints() {
+        let body = build_body(
+            &config("claude-opus-5-5"),
+            &cached(vec![
+                Message::system("stable").with_extended_cache(),
+                Message::user("first"),
+                Message::assistant("answer").with_cache(),
+                Message::user("<context>memory</context> second"),
+            ]),
+            false,
+        );
+        let one_hour = json!({ "type": "ephemeral", "ttl": "1h" });
+        let five_min = json!({ "type": "ephemeral" });
+        assert!(body["tools"][0].get("cache_control").is_none());
+        assert_eq!(body["tools"][1]["cache_control"], one_hour);
+        assert_eq!(body["system"], json!([{ "type": "text", "text": "stable", "cache_control": one_hour }]));
+        assert_eq!(body["messages"][0]["content"], json!("first"));
+        assert_eq!(
+            body["messages"][1]["content"],
+            json!([{ "type": "text", "text": "answer", "cache_control": five_min }])
+        );
+        assert_eq!(body["messages"][2]["content"][0]["cache_control"], five_min);
+    }
+
+    #[test]
+    fn single_unmarked_system_stays_a_string() {
+        let body = build_body(
+            &config("claude-opus-5-5"),
+            &request(vec![Message::system("s"), Message::user("u")], RequestOptions::default()),
+            false,
+        );
+        assert_eq!(body["system"], json!("s"));
+        assert_eq!(body["messages"][0]["content"], json!("u"));
+    }
+
+    #[test]
+    fn tail_skips_thinking_and_lands_on_tool_results() {
+        let assistant = Message::assistant("").with_provider_content(ProviderContent::new(
+            ProviderContent::ANTHROPIC,
+            "claude-opus-5-5",
+            vec![
+                json!({ "type": "tool_use", "id": "t1", "name": "a", "input": {} }),
+                json!({ "type": "thinking", "thinking": "", "signature": "s" }),
+            ],
+        ));
+        let mut req = cached(vec![Message::user("go"), assistant.with_cache()]);
+        let body = build_body(&config("claude-opus-5-5"), &req, false);
+        let blocks = &body["messages"][1]["content"];
+        assert!(blocks[0].get("cache_control").is_some());
+        assert!(blocks[1].get("cache_control").is_none());
+
+        req.messages.push(Message::tool_results(vec![crate::ToolResult::with_name("t1", "ok", "a")]));
+        let body = build_body(&config("claude-opus-5-5"), &req, false);
+        assert_eq!(body["messages"][2]["content"][0]["type"], json!("tool_result"));
+        assert!(body["messages"][2]["content"][0].get("cache_control").is_some());
+    }
+
+    #[test]
+    fn breakpoints_capped_at_four_and_long_before_short() {
+        let body = build_body(
+            &config("claude-opus-5-5"),
+            &cached(vec![
+                Message::system("stable").with_extended_cache(),
+                Message::user("1").with_cache(),
+                Message::assistant("2").with_cache(),
+                Message::user("3").with_extended_cache(),
+                Message::assistant("4"),
+                Message::user("5"),
+            ]),
+            false,
+        );
+        let marks: Vec<String> = ["/tools/1", "/system/0", "/messages/0/content/0", "/messages/1/content/0", "/messages/2/content/0", "/messages/4/content/0"]
+            .iter()
+            .filter(|p| body.pointer(&format!("{p}/cache_control")).is_some())
+            .map(|p| p.to_string())
+            .collect();
+        assert_eq!(marks, ["/tools/1", "/system/0", "/messages/2/content/0", "/messages/4/content/0"]);
+        // The 1h breakpoint on message 3 follows a 5m one that was dropped, so it keeps its TTL.
+        assert_eq!(body.pointer("/messages/2/content/0/cache_control/ttl"), Some(&json!("1h")));
+
+        let body = build_body(
+            &config("claude-opus-5-5"),
+            &cached(vec![Message::user("1").with_cache(), Message::user("2").with_extended_cache()]),
+            false,
+        );
+        // tools (1h), message 1 (5m), message 2 (1h -> 5m: it follows a 5m entry), tail on message 2.
+        assert_eq!(body.pointer("/messages/1/content/0/cache_control"), Some(&json!({ "type": "ephemeral" })));
+    }
+
+    #[test]
+    fn usage_counts_cached_input() {
+        let usage = parse_usage(Some(&json!({
+            "input_tokens": 10,
+            "cache_creation_input_tokens": 200,
+            "cache_read_input_tokens": 3000,
+            "cache_creation": { "ephemeral_5m_input_tokens": 50, "ephemeral_1h_input_tokens": 150 },
+            "output_tokens": 7
+        })));
+        assert_eq!(usage.prompt_tokens, 3210);
+        assert_eq!(usage.cache_read_tokens, Some(3000));
+        assert_eq!(usage.cache_creation_tokens, Some(200));
+        assert_eq!(usage.cache_creation_1h_tokens, Some(150));
+        assert_eq!(usage.effective_prompt_tokens(), 10);
+        assert_eq!(usage.total_tokens, 3217);
     }
 }

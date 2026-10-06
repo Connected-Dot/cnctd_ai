@@ -25,7 +25,7 @@ pub use message::{Message, Role, ToolResult, ImageContent, ContentPart, Document
 pub use request::{
     CompletionRequest, RequestOptions, BuiltInTool,
     LatLng, RetrievalConfig, ToolConfig,
-    ThinkingLevel, MediaResolution, CitationConfig, Effort, Thinking,
+    ThinkingLevel, MediaResolution, CitationConfig, Effort, Thinking, PromptCache,
     McpServerConfig, McpApprovalMode,
 };
 pub use tool::ToolUse;

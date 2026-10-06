@@ -119,15 +119,21 @@ impl CompletionResponse {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Usage {
+    /// Every input token of the request, cached or not, on every provider.
+    /// `cache_read_tokens` and `cache_creation_tokens` are parts of it.
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
-    /// Tokens written to cache (Anthropic prompt caching)
+    /// Input tokens written to the cache (Anthropic; billed above base input)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_creation_tokens: Option<u32>,
-    /// Tokens read from cache (Anthropic prompt caching)
+    /// Input tokens read from the cache (all providers; billed below base input)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_tokens: Option<u32>,
+    /// The part of `cache_creation_tokens` written with a 1-hour TTL
+    /// (Anthropic; billed at the 1h write rate, the rest at the 5m rate)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_1h_tokens: Option<u32>,
 }
 
 impl Usage {
@@ -138,6 +144,7 @@ impl Usage {
             total_tokens: 0,
             cache_creation_tokens: None,
             cache_read_tokens: None,
+            cache_creation_1h_tokens: None,
         }
     }
 
@@ -152,6 +159,9 @@ impl Usage {
         if let Some(n) = other.cache_read_tokens {
             *self.cache_read_tokens.get_or_insert(0) += n;
         }
+        if let Some(n) = other.cache_creation_1h_tokens {
+            *self.cache_creation_1h_tokens.get_or_insert(0) += n;
+        }
     }
 
     /// Check if any caching was used in this request
@@ -159,11 +169,12 @@ impl Usage {
         self.cache_creation_tokens.is_some() || self.cache_read_tokens.is_some()
     }
 
-    /// Get the effective prompt tokens (non-cached portion)
-    /// Returns prompt_tokens minus cache_read_tokens if available
+    /// Input tokens billed at the base rate: everything not read from or
+    /// written to the cache.
     pub fn effective_prompt_tokens(&self) -> u32 {
         self.prompt_tokens
             .saturating_sub(self.cache_read_tokens.unwrap_or(0))
+            .saturating_sub(self.cache_creation_tokens.unwrap_or(0))
     }
 }
 

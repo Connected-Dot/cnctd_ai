@@ -228,6 +228,19 @@ fn effective_effort(request: &CompletionRequest) -> Option<Effort> {
     })
 }
 
+/// Responses usage -> [`Usage`]: `input_tokens` already includes the
+/// automatically cached part, reported in `input_tokens_details`.
+pub(crate) fn usage_from(u: &async_openai::types::responses::ResponseUsage) -> crate::response::Usage {
+    crate::response::Usage {
+        prompt_tokens: u.input_tokens,
+        completion_tokens: u.output_tokens,
+        total_tokens: u.total_tokens,
+        cache_creation_tokens: None,
+        cache_read_tokens: Some(u.input_tokens_details.cached_tokens),
+        cache_creation_1h_tokens: None,
+    }
+}
+
 /// Build the request with the typed builder, then add what async-openai 0.33
 /// cannot express (reasoning effort `max`) on the JSON.
 fn build_request_json(config: &OpenAiConfig, request: &CompletionRequest, stream: bool) -> Result<serde_json::Value> {
@@ -261,6 +274,14 @@ fn build_request_json(config: &OpenAiConfig, request: &CompletionRequest, stream
 
     if let Some(effort) = effective_effort(request) {
         json["reasoning"] = serde_json::json!({ "effort": effort.as_str() });
+    }
+    if let Some(key) = request
+        .options
+        .as_ref()
+        .and_then(|o| o.prompt_cache.as_ref())
+        .and_then(|p| p.key.as_ref())
+    {
+        json["prompt_cache_key"] = serde_json::json!(key);
     }
     Ok(json)
 }
@@ -347,16 +368,7 @@ pub(super) async fn complete(
     let mut message = crate::message::Message::assistant(content);
     message.tool_uses = tool_uses_opt.clone();
 
-    let usage = match &response.usage {
-        Some(u) => crate::response::Usage {
-            prompt_tokens: u.input_tokens,
-            completion_tokens: u.output_tokens,
-            total_tokens: u.total_tokens,
-            cache_creation_tokens: None,
-            cache_read_tokens: None,
-        },
-        None => crate::response::Usage::zero(),
-    };
+    let usage = response.usage.as_ref().map(usage_from).unwrap_or_else(crate::response::Usage::zero);
 
     Ok(CompletionResponse {
         message,
@@ -447,5 +459,17 @@ mod tests {
         .unwrap();
         assert_eq!(json["reasoning"], serde_json::json!({ "effort": "none" }));
         assert!(json.get("include").is_none());
+    }
+
+    #[test]
+    fn prompt_cache_key_reaches_the_body() {
+        let opts = RequestOptions {
+            prompt_cache: Some(crate::request::PromptCache { key: Some("dot-1".into()), ..Default::default() }),
+            ..Default::default()
+        };
+        let json = build_request_json(&config("gpt-5.5"), &request(Some(opts)), false).unwrap();
+        assert_eq!(json["prompt_cache_key"], serde_json::json!("dot-1"));
+        let json = build_request_json(&config("gpt-5.5"), &request(None), false).unwrap();
+        assert!(json.get("prompt_cache_key").is_none());
     }
 }

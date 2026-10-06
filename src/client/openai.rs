@@ -176,6 +176,7 @@ pub(super) async fn complete(
             total_tokens: usage.total_tokens,
             cache_creation_tokens: None, // OpenAI caching is automatic
             cache_read_tokens: None,
+            cache_creation_1h_tokens: None,
         }
     } else {
         crate::response::Usage {
@@ -184,6 +185,7 @@ pub(super) async fn complete(
             total_tokens: 0,
             cache_creation_tokens: None,
             cache_read_tokens: None,
+            cache_creation_1h_tokens: None,
         }
     };
     

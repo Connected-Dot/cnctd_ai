@@ -2,7 +2,7 @@ pub mod config;
 pub mod options;
 pub(crate) mod anthropic;
 mod openai;
-mod openai_responses;
+pub(crate) mod openai_responses;
 pub(crate) mod gemini;
 
 pub use config::{AnthropicConfig, OpenAiConfig, GeminiConfig};
