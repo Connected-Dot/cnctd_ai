@@ -362,6 +362,7 @@ fn parse_completion_from_body(body: &serde_json::Value) -> Result<crate::respons
             tool_call_id: None,
             tool_results: None,
             reasoning_items: None,
+            provider_content: None,
         },
         usage,
         finish_reason,
@@ -377,6 +378,7 @@ fn parse_completion_from_body(body: &serde_json::Value) -> Result<crate::respons
         reasoning_items: None,
         reasoning_summary: None,
         citations: None,
+        refusal: None,
     })
 }
 

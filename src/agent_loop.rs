@@ -33,7 +33,7 @@ use std::time::Instant;
 
 use crate::message::Message;
 use crate::request::CompletionRequest;
-use crate::response::{CompletionResponse, FinishReason};
+use crate::response::{CompletionResponse, FinishReason, Usage};
 use crate::stream::StreamChunk;
 use crate::tool::ToolUse;
 use crate::{Client, Error};
@@ -124,6 +124,14 @@ pub struct LoopResult {
     pub iterations: u32,
     pub final_response: Option<CompletionResponse>,
     pub accumulated_text: String,
+    /// Every message the loop added, in order: each round's assistant
+    /// message (with its provider content / reasoning items) followed by its
+    /// tool-results message, then the final assistant message. This is the
+    /// turn exactly as the model saw it, for persistence and replay.
+    pub messages: Vec<Message>,
+    /// Usage summed over every provider call in the loop. `final_response`
+    /// carries only the last call's.
+    pub usage: Usage,
 }
 
 /// Loop tunables. Defaults match transmit-ai conventions.
@@ -255,6 +263,8 @@ where
     // turn (history grows monotonically); we use that to scale tool output
     // limits before re-feeding tool_result messages to the model.
     let mut last_prompt_tokens: Option<u32> = None;
+    let mut turn_messages: Vec<Message> = Vec::new();
+    let mut total_usage = Usage::zero();
 
     loop {
         if iteration >= config.max_turns {
@@ -263,6 +273,8 @@ where
                 iterations: iteration,
                 final_response: last_response,
                 accumulated_text,
+                messages: turn_messages,
+                usage: total_usage,
             });
         }
         if let Some(check) = &config.should_continue {
@@ -272,6 +284,8 @@ where
                     iterations: iteration,
                     final_response: last_response,
                     accumulated_text,
+                    messages: turn_messages,
+                    usage: total_usage,
                 });
             }
         }
@@ -301,6 +315,8 @@ where
                     iterations: iteration,
                     final_response: last_response,
                     accumulated_text,
+                    messages: turn_messages,
+                    usage: total_usage,
                 });
             }
         };
@@ -331,6 +347,8 @@ where
                         iterations: iteration,
                         final_response: last_response,
                         accumulated_text,
+                        messages: turn_messages,
+                        usage: total_usage,
                     });
                 }
             }
@@ -347,12 +365,16 @@ where
                     iterations: iteration,
                     final_response: last_response,
                     accumulated_text,
+                    messages: turn_messages,
+                    usage: total_usage,
                 });
             }
         };
 
         let stop_reason = response.finish_reason.clone();
         last_prompt_tokens = Some(response.usage.prompt_tokens);
+        total_usage.add(&response.usage);
+        turn_messages.push(response.message.clone());
         last_response = Some(response.clone());
 
         // No tool calls (or wrap-up turn) — model is done.
@@ -365,6 +387,8 @@ where
                     iterations: iteration,
                     final_response: last_response,
                     accumulated_text,
+                    messages: turn_messages,
+                    usage: total_usage,
                 });
             }
         };
@@ -404,17 +428,20 @@ where
                 consecutive_errors.remove(&tu.name);
             }
 
-            let truncated = truncate_tool_output(result.output.clone(), max_chars);
-            tool_results.push((tu.id.clone(), truncated));
+            // Gemini matches results by function name and OpenAI by call_id,
+            // so both travel with the result.
+            tool_results.push(crate::message::ToolResult {
+                tool_call_id: tu.id.clone(),
+                content: truncate_tool_output(result.output.clone(), max_chars),
+                is_error: !result.success,
+                function_name: Some(tu.name.clone()),
+                call_id: tu.call_id.clone(),
+            });
         }
 
         // Feed tool results back as the next user-side message and loop.
-        let result_message = Message::tool_results(
-            tool_results
-                .into_iter()
-                .map(|(id, out)| crate::message::ToolResult::new(&id, out))
-                .collect(),
-        );
+        let result_message = Message::tool_results(tool_results);
+        turn_messages.push(result_message.clone());
         request.messages.push(result_message);
 
         handler.on_turn_complete(iteration).await;

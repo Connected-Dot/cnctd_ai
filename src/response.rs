@@ -28,6 +28,22 @@ pub struct CompletionResponse {
     /// Citations from source documents (Anthropic Citations API)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub citations: Option<Vec<Citation>>,
+    /// Set when the model or the provider's safety system declined the
+    /// request (`finish_reason` is then [`FinishReason::Refusal`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<Refusal>,
+}
+
+/// Why a request was declined. Every field is provider-supplied and optional.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Refusal {
+    /// Provider category, e.g. Anthropic `cyber` / `bio`, Gemini `SAFETY` /
+    /// `PROHIBITED_CONTENT`, OpenAI `content_filter`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// Human-readable explanation, when the provider gives one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
 }
 
 impl CompletionResponse {
@@ -94,6 +110,11 @@ impl CompletionResponse {
     pub fn get_reasoning_summary(&self) -> Option<&str> {
         self.reasoning_summary.as_deref()
     }
+
+    /// True when the request was declined (see [`CompletionResponse::refusal`]).
+    pub fn is_refusal(&self) -> bool {
+        self.finish_reason == FinishReason::Refusal
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -110,6 +131,29 @@ pub struct Usage {
 }
 
 impl Usage {
+    pub fn zero() -> Self {
+        Self {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            cache_creation_tokens: None,
+            cache_read_tokens: None,
+        }
+    }
+
+    /// Add another call's usage (e.g. summing the rounds of a tool loop).
+    pub fn add(&mut self, other: &Usage) {
+        self.prompt_tokens += other.prompt_tokens;
+        self.completion_tokens += other.completion_tokens;
+        self.total_tokens += other.total_tokens;
+        if let Some(n) = other.cache_creation_tokens {
+            *self.cache_creation_tokens.get_or_insert(0) += n;
+        }
+        if let Some(n) = other.cache_read_tokens {
+            *self.cache_read_tokens.get_or_insert(0) += n;
+        }
+    }
+
     /// Check if any caching was used in this request
     pub fn used_cache(&self) -> bool {
         self.cache_creation_tokens.is_some() || self.cache_read_tokens.is_some()
@@ -130,6 +174,9 @@ pub enum FinishReason {
     Length,
     ContentFilter,
     ToolUse,
+    /// The model or the provider's safety system declined; see
+    /// [`CompletionResponse::refusal`].
+    Refusal,
     #[serde(other)]
     Other,
 }

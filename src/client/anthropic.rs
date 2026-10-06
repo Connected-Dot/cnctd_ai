@@ -1,494 +1,605 @@
-use crate::error::Result;
-use crate::request::CompletionRequest;
-use crate::response::CompletionResponse;
-use crate::stream::CompletionStream;
+//! Anthropic Messages API over raw HTTP.
+//!
+//! Streaming and non-streaming share one request builder ([`build_body`]) and
+//! the non-streaming path parses with [`parse_message`]; the SSE parser lives
+//! in `stream.rs`. Assistant turns that carry [`ProviderContent`] from an
+//! Anthropic response are replayed block for block: thinking and
+//! redacted_thinking blocks must go back unchanged in a tool loop.
+
+use serde_json::{json, Value};
+
 use super::config::AnthropicConfig;
+use crate::error::Result;
+use crate::message::{ProviderContent, Role};
+use crate::request::{CompletionRequest, Effort, Thinking};
+use crate::response::{CompletionResponse, FinishReason, Refusal, Usage};
+use crate::stream::CompletionStream;
+
+const API_URL: &str = "https://api.anthropic.com/v1/messages";
+const API_VERSION: &str = "2023-06-01";
+const DEFAULT_MAX_TOKENS: u32 = 4096;
 
 pub(super) async fn complete(
     config: &AnthropicConfig,
     request: &CompletionRequest,
 ) -> Result<CompletionResponse> {
-    use anthropic_sdk::{Anthropic, MessageCreateBuilder, MessageContent, ContentBlockParam};
-    
-    let client = Anthropic::new(&config.api_key)
-        .map_err(|e| crate::error::Error::AnthropicError(e.to_string()))?;
-    
-    let mut builder = MessageCreateBuilder::new(
-        &config.model,
-        request.options.as_ref().and_then(|o| o.max_tokens).unwrap_or(4096),
-    );
-    
-    // Add system message if present
-    if let Some(system_msg) = request.messages.iter().find(|m| matches!(m.role, crate::message::Role::System)) {
-        builder = builder.system(&system_msg.content);
-    }
-    
-    // Add user/assistant messages - handle tool results, tool uses, and images
-    for msg in request.messages.iter().filter(|m| !matches!(m.role, crate::message::Role::System)) {
-        match msg.role {
-            crate::message::Role::User => {
-                // Check if this is a tool result message
-                if let Some(tool_call_id) = &msg.tool_call_id {
-                    // This is a tool result - use content blocks
-                    builder = builder.user(MessageContent::Blocks(vec![
-                        ContentBlockParam::ToolResult {
-                            tool_use_id: tool_call_id.clone(),
-                            content: Some(msg.content.clone()),
-                            is_error: Some(false),
-                        }
-                    ]));
-                } else if msg.has_images() {
-                    // Message with images - build content blocks
-                    let mut content_blocks = Vec::new();
-
-                    // Add images first (Anthropic prefers images before text)
-                    if let Some(images) = &msg.images {
-                        for image in images {
-                            content_blocks.push(ContentBlockParam::Image {
-                                source: anthropic_sdk::types::ImageSource::Base64 {
-                                    media_type: image.media_type.clone(),
-                                    data: image.data.clone(),
-                                },
-                            });
-                        }
-                    }
-
-                    // Add text content if present
-                    if !msg.content.is_empty() {
-                        content_blocks.push(ContentBlockParam::Text {
-                            text: msg.content.clone(),
-                        });
-                    }
-
-                    builder = builder.user(MessageContent::Blocks(content_blocks));
-                } else {
-                    // Regular user message
-                    builder = builder.user(MessageContent::Text(msg.content.clone()));
-                }
-            }
-            crate::message::Role::Assistant => {
-                // Check if this has tool uses
-                if let Some(tool_uses) = &msg.tool_uses {
-                    // Assistant message with tool calls
-                    let mut content_blocks = Vec::new();
-                    
-                    // Add text content if present
-                    if !msg.content.is_empty() {
-                        content_blocks.push(ContentBlockParam::Text {
-                            text: msg.content.clone(),
-                        });
-                    }
-                    
-                    // Add tool use blocks
-                    for tool_use in tool_uses {
-                        content_blocks.push(ContentBlockParam::ToolUse {
-                            id: tool_use.id.clone(),
-                            name: tool_use.name.clone(),
-                            input: tool_use.input.clone(),
-                        });
-                    }
-                    
-                    builder = builder.assistant(MessageContent::Blocks(content_blocks));
-                } else {
-                    // Regular assistant message
-                    builder = builder.assistant(MessageContent::Text(msg.content.clone()));
-                }
-            }
-            crate::message::Role::System => {}
-        }
-    }
-    
-    // Add tools if present
-    if let Some(tools) = &request.tools {
-        let anthropic_tools: Vec<anthropic_sdk::Tool> = tools
-            .iter()
-            .map(|tool| anthropic_sdk::Tool {
-                name: tool.name.to_string(),
-                description: tool.description.as_ref().map(|d| d.to_string()).unwrap_or_default(),
-                input_schema: serde_json::from_value(serde_json::Value::Object((*tool.input_schema).clone()))
-                    .unwrap_or_else(|_| anthropic_sdk::types::ToolInputSchema {
-                        schema_type: "object".to_string(),
-                        properties: serde_json::Map::new(),
-                        required: vec![],
-                        additional: serde_json::Map::new(),
-                    }),
-            })
-            .collect();
-        builder = builder.tools(anthropic_tools);
-    }
-    
-    // Apply options
-    if let Some(opts) = &request.options {
-        if let Some(temp) = opts.temperature {
-            builder = builder.temperature(temp);
-        }
-        if let Some(top_p) = opts.top_p {
-            builder = builder.top_p(top_p);
-        }
-    }
-    
-    let anthropic_response = client.messages()
-        .create(builder.build())
-        .await
-        .map_err(|e| crate::error::Error::AnthropicError(e.to_string()))?;
-    
-    // Extract text content AND tool uses from response
-    let mut content = String::new();
-    let mut tool_uses = Vec::new();
-    
-    for block in &anthropic_response.content {
-        match block {
-            anthropic_sdk::ContentBlock::Text { text } => {
-                content.push_str(text);
-            }
-            anthropic_sdk::ContentBlock::ToolUse { id, name, input } => {
-                tool_uses.push(crate::ToolUse { call_id: None,
-                    id: id.clone(),
-                    name: name.clone(),
-                    input: input.clone(),
-                });
-            }
-            _ => {}
-        }
-    }
-    
-    let tool_uses_opt = if !tool_uses.is_empty() {
-        Some(tool_uses.clone())
-    } else {
-        None
-    };
-    
-    let message = crate::message::Message {
-        role: crate::message::Role::Assistant,
-        content,
-        images: None,
-        videos: None,
-        documents: None,
-        cache_control: None,
-        tool_uses: tool_uses_opt.clone(),
-        tool_call_id: None,
-        tool_results: None,
-        reasoning_items: None,
-    };
-
-    let usage = crate::response::Usage {
-        prompt_tokens: anthropic_response.usage.input_tokens,
-        completion_tokens: anthropic_response.usage.output_tokens,
-        total_tokens: anthropic_response.usage.input_tokens + anthropic_response.usage.output_tokens,
-        // Note: Cache usage not available through the SDK - use streaming for full cache support
-        cache_creation_tokens: None,
-        cache_read_tokens: None,
-    };
-    
-    let finish_reason = match anthropic_response.stop_reason {
-        Some(anthropic_sdk::StopReason::EndTurn) => crate::response::FinishReason::Stop,
-        Some(anthropic_sdk::StopReason::MaxTokens) => crate::response::FinishReason::Length,
-        Some(anthropic_sdk::StopReason::StopSequence) => crate::response::FinishReason::Stop,
-        Some(anthropic_sdk::StopReason::ToolUse) => crate::response::FinishReason::ToolUse,
-        _ => crate::response::FinishReason::Other,
-    };
-    
-    Ok(CompletionResponse {
-        message,
-        usage,
-        finish_reason,
-        model: anthropic_response.model,
-        tool_uses: tool_uses_opt,
-        grounding_metadata: None,
-        code_execution_results: None,
-        google_maps_widget_token: None,
-        reasoning_items: None,
-        reasoning_summary: None, // Anthropic doesn't have reasoning summaries
-        citations: None, // TODO: Parse citations from response when citations API is enabled
-    })
+    let body = build_body(config, request, false);
+    let response = send(config, &body).await?;
+    let json: Value = response.json().await.map_err(|e| {
+        crate::error::Error::AnthropicError(format!("Failed to parse response: {}", e))
+    })?;
+    Ok(parse_message(&json, &config.model))
 }
-
-// ============================================================================
-// TEMPORARY WORKAROUND: Custom streaming implementation
-// ============================================================================
-// The anthropic-sdk-rust (v0.1.1) has a bug where create_stream() uses
-// Bearer token authentication instead of x-api-key header, causing 401 errors.
-// 
-// Issue: https://github.com/dimichgh/anthropic-sdk-rust/issues/2
-// Created: Sept 11, 2025
-//
-// TODO: Once the upstream bug is fixed and a new version is released:
-//   1. Remove this custom implementation
-//   2. Restore the original SDK-based streaming (see git history)
-//   3. Update anthropic-sdk-rust dependency version
-//   4. Test streaming works with SDK's create_stream() method
-// ============================================================================
 
 pub(super) async fn stream(
     config: &AnthropicConfig,
     request: &CompletionRequest,
 ) -> Result<CompletionStream> {
+    let body = build_body(config, request, true);
+    let response = send(config, &body).await?;
+    Ok(CompletionStream::anthropic_custom(
+        response.bytes_stream(),
+        config.model.clone(),
+    ))
+}
+
+async fn send(config: &AnthropicConfig, body: &Value) -> Result<reqwest::Response> {
     use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
-    
-    // Build the request body manually
-    let mut body = serde_json::json!({
-        "model": config.model,
-        "max_tokens": request.options.as_ref().and_then(|o| o.max_tokens).unwrap_or(4096),
-        "messages": [],
-        "stream": true,
-    });
 
-    // Add system message if present (with cache control support)
-    if let Some(system_msg) = request.messages.iter().find(|m| matches!(m.role, crate::message::Role::System)) {
-        // If cache control is set, use content block format
-        if system_msg.cache_control.is_some() {
-            body["system"] = serde_json::json!([{
-                "type": "text",
-                "text": system_msg.content,
-                "cache_control": { "type": "ephemeral" }
-            }]);
-        } else {
-            body["system"] = serde_json::json!(system_msg.content);
-        }
-    }
-
-    // Add user/assistant messages - handle tool results, tool uses, and images properly
-    let mut messages = Vec::new();
-    for msg in request.messages.iter().filter(|m| !matches!(m.role, crate::message::Role::System)) {
-        match msg.role {
-            crate::message::Role::User => {
-                // Check if this has multiple tool results (new format)
-                if let Some(tool_results) = &msg.tool_results {
-                    // Multiple tool results in a single message
-                    let content_blocks: Vec<serde_json::Value> = tool_results
-                        .iter()
-                        .map(|tr| serde_json::json!({
-                            "type": "tool_result",
-                            "tool_use_id": tr.tool_call_id,
-                            "content": tr.content,
-                            "is_error": tr.is_error,
-                        }))
-                        .collect();
-                    messages.push(serde_json::json!({
-                        "role": "user",
-                        "content": content_blocks,
-                    }));
-                } else if let Some(tool_call_id) = &msg.tool_call_id {
-                    // Legacy single tool result format
-                    messages.push(serde_json::json!({
-                        "role": "user",
-                        "content": [{
-                            "type": "tool_result",
-                            "tool_use_id": tool_call_id,
-                            "content": msg.content.clone(),
-                            "is_error": false,
-                        }]
-                    }));
-                } else if msg.has_images() || msg.has_documents() {
-                    // Message with images/documents - build content blocks
-                    let mut content_blocks = Vec::new();
-
-                    // Add documents first (Anthropic prefers documents before text)
-                    // NOTE: Anthropic only supports application/pdf for the "document" block type.
-                    // For text-based files (CSV, TXT, MD, etc.), decode base64 and send as text blocks.
-                    if let Some(documents) = &msg.documents {
-                        for doc in documents {
-                            if doc.media_type == "application/pdf" {
-                                // PDF: use native document block
-                                let mut doc_block = serde_json::json!({
-                                    "type": "document",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": doc.media_type,
-                                        "data": doc.data
-                                    }
-                                });
-                                if msg.cache_control.is_some() {
-                                    doc_block["cache_control"] = serde_json::json!({ "type": "ephemeral" });
-                                }
-                                content_blocks.push(doc_block);
-                            } else if doc.media_type.starts_with("text/")
-                                || doc.media_type == "application/json"
-                                || doc.media_type == "application/xml"
-                            {
-                                // Text-based files: decode base64 and send as text block
-                                if let Ok(decoded) = base64::Engine::decode(
-                                    &base64::engine::general_purpose::STANDARD,
-                                    &doc.data,
-                                ) {
-                                    let text_content = String::from_utf8_lossy(&decoded);
-                                    let label = doc.filename.as_deref().unwrap_or("document");
-                                    let formatted = format!(
-                                        "[File: {label} ({})]\n{text_content}",
-                                        doc.media_type
-                                    );
-                                    content_blocks.push(serde_json::json!({
-                                        "type": "text",
-                                        "text": formatted
-                                    }));
-                                } else {
-                                    eprintln!(
-                                        "[cnctd_ai] Failed to decode base64 for text document: {}",
-                                        doc.filename.as_deref().unwrap_or("unknown")
-                                    );
-                                }
-                            } else {
-                                // Binary non-PDF (DOCX, XLSX, etc.): not supported by Anthropic
-                                eprintln!(
-                                    "[cnctd_ai] Skipping unsupported document type for Anthropic: {}",
-                                    doc.media_type
-                                );
-                            }
-                        }
-                    }
-
-                    // Add images (Anthropic prefers images before text)
-                    if let Some(images) = &msg.images {
-                        for image in images {
-                            content_blocks.push(serde_json::json!({
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": image.media_type,
-                                    "data": image.data
-                                }
-                            }));
-                        }
-                    }
-
-                    // Add text content if present
-                    if !msg.content.is_empty() {
-                        let mut text_block = serde_json::json!({
-                            "type": "text",
-                            "text": msg.content.clone()
-                        });
-                        // Add cache_control to the last content block if set
-                        if msg.cache_control.is_some() && msg.documents.is_none() {
-                            text_block["cache_control"] = serde_json::json!({ "type": "ephemeral" });
-                        }
-                        content_blocks.push(text_block);
-                    }
-
-                    messages.push(serde_json::json!({
-                        "role": "user",
-                        "content": content_blocks
-                    }));
-                } else if msg.cache_control.is_some() {
-                    // Regular user message with cache control
-                    messages.push(serde_json::json!({
-                        "role": "user",
-                        "content": [{
-                            "type": "text",
-                            "text": msg.content.clone(),
-                            "cache_control": { "type": "ephemeral" }
-                        }]
-                    }));
-                } else {
-                    // Regular user message
-                    messages.push(serde_json::json!({
-                        "role": "user",
-                        "content": msg.content.clone(),
-                    }));
-                }
-            }
-
-            crate::message::Role::Assistant => {
-                // Check if this has tool uses
-                if let Some(tool_uses) = &msg.tool_uses {
-                    // Assistant message with tool calls needs content blocks
-                    let mut content_blocks = Vec::new();
-                    
-                    // Add text content if present
-                    if !msg.content.is_empty() {
-                        content_blocks.push(serde_json::json!({
-                            "type": "text",
-                            "text": msg.content.clone(),
-                        }));
-                    }
-                    
-                    // Add tool use blocks
-                    for tool_use in tool_uses {
-                        content_blocks.push(serde_json::json!({
-                            "type": "tool_use",
-                            "id": tool_use.id.clone(),
-                            "name": tool_use.name.clone(),
-                            "input": tool_use.input.clone(),
-                        }));
-                    }
-                    
-                    messages.push(serde_json::json!({
-                        "role": "assistant",
-                        "content": content_blocks,
-                    }));
-                } else {
-                    // Regular assistant message
-                    messages.push(serde_json::json!({
-                        "role": "assistant",
-                        "content": msg.content.clone(),
-                    }));
-                }
-            }
-            crate::message::Role::System => {}
-        }
-    }
-    body["messages"] = serde_json::json!(messages);
-
-    // Include tools if present
-    if let Some(tools) = &request.tools {
-        let tools_json: Vec<_> = tools.iter().map(|tool| {
-            serde_json::json!({
-                "name": tool.name.to_string(),
-                "description": tool.description.as_ref().map(|d| d.to_string()).unwrap_or_default(),
-                "input_schema": serde_json::Value::Object((*tool.input_schema).clone()),
-            })
-        }).collect();
-        body["tools"] = serde_json::json!(tools_json);
-    }
-
-    // Apply options
-    if let Some(opts) = &request.options {
-        if let Some(temp) = opts.temperature {
-            body["temperature"] = serde_json::json!(temp);
-        }
-        if let Some(top_p) = opts.top_p {
-            body["top_p"] = serde_json::json!(top_p);
-        }
-    }
-    
-    // Build headers with correct x-api-key authentication
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(
         "x-api-key",
         HeaderValue::from_str(&config.api_key)
-            .map_err(|e| crate::error::Error::Other(format!("Invalid API key: {}", e)))?
+            .map_err(|e| crate::error::Error::Other(format!("Invalid API key: {}", e)))?,
     );
     headers.insert(
         "anthropic-version",
-        HeaderValue::from_static("2023-06-01")
+        HeaderValue::from_str(config.version.as_deref().unwrap_or(API_VERSION))
+            .map_err(|e| crate::error::Error::Other(format!("Invalid API version: {}", e)))?,
     );
-    // Enable prompt caching beta feature
-    headers.insert(
-        "anthropic-beta",
-        HeaderValue::from_static("prompt-caching-2024-07-31")
-    );
-    
-    // Make the HTTP request
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.anthropic.com/v1/messages")
+
+    let response = reqwest::Client::new()
+        .post(API_URL)
         .headers(headers)
-        .json(&body)
+        .json(body)
         .send()
         .await
         .map_err(|e| crate::error::Error::Other(format!("HTTP request failed: {}", e)))?;
-    
-    // Check for HTTP errors
+
     if !response.status().is_success() {
         let status = response.status();
-        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(crate::error::Error::AnthropicError(
-            format!("HTTP {}: {}", status, error_text)
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(crate::error::Error::AnthropicError(format!(
+            "HTTP {}: {}",
+            status, error_text
+        )));
+    }
+    Ok(response)
+}
+
+/// Build the Messages API request body.
+pub(crate) fn build_body(config: &AnthropicConfig, request: &CompletionRequest, stream: bool) -> Value {
+    let opts = request.options.as_ref();
+    let mut body = json!({
+        "model": config.model,
+        "max_tokens": opts.and_then(|o| o.max_tokens).unwrap_or(DEFAULT_MAX_TOKENS),
+        "messages": [],
+    });
+    if stream {
+        body["stream"] = json!(true);
+    }
+
+    if let Some(system_msg) = request.messages.iter().find(|m| m.role == Role::System) {
+        if system_msg.cache_control.is_some() {
+            body["system"] = json!([{
+                "type": "text",
+                "text": system_msg.content,
+                "cache_control": { "type": "ephemeral" }
+            }]);
+        } else {
+            body["system"] = json!(system_msg.content);
+        }
+    }
+
+    let mut messages = Vec::new();
+    for msg in request.messages.iter().filter(|m| m.role != Role::System) {
+        match msg.role {
+            Role::User => messages.push(user_message(msg)),
+            Role::Assistant => {
+                if let Some(m) = assistant_message(msg) {
+                    messages.push(m);
+                }
+            }
+            Role::System => {}
+        }
+    }
+    body["messages"] = json!(messages);
+
+    if let Some(tools) = &request.tools {
+        let tools_json: Vec<_> = tools
+            .iter()
+            .map(|tool| {
+                json!({
+                    "name": tool.name.to_string(),
+                    "description": tool.description.as_ref().map(|d| d.to_string()).unwrap_or_default(),
+                    "input_schema": Value::Object((*tool.input_schema).clone()),
+                })
+            })
+            .collect();
+        body["tools"] = json!(tools_json);
+    }
+
+    if let Some(opts) = opts {
+        if let Some(temp) = opts.temperature {
+            body["temperature"] = json!(temp);
+        }
+        if let Some(top_p) = opts.top_p {
+            body["top_p"] = json!(top_p);
+        }
+        if let Some(stops) = opts.stop_sequences.as_ref().filter(|s| !s.is_empty()) {
+            body["stop_sequences"] = json!(stops);
+        }
+        if let Some(thinking) = &opts.thinking {
+            body["thinking"] = match thinking {
+                Thinking::Adaptive => json!({ "type": "adaptive" }),
+                Thinking::Budget { tokens } => json!({ "type": "enabled", "budget_tokens": tokens }),
+                Thinking::BetweenTools => json!({ "type": "between_tools" }),
+                Thinking::Disabled => json!({ "type": "disabled" }),
+            };
+        }
+        if let Some(effort) = opts.effort {
+            body["output_config"] = json!({ "effort": anthropic_effort(effort) });
+        }
+    }
+
+    body
+}
+
+/// Anthropic's effort scale starts at `low`.
+fn anthropic_effort(effort: Effort) -> &'static str {
+    match effort {
+        Effort::None | Effort::Minimal | Effort::Low => "low",
+        other => other.as_str(),
+    }
+}
+
+fn user_message(msg: &crate::message::Message) -> Value {
+    if let Some(tool_results) = &msg.tool_results {
+        let content_blocks: Vec<Value> = tool_results
+            .iter()
+            .map(|tr| {
+                json!({
+                    "type": "tool_result",
+                    "tool_use_id": tr.tool_call_id,
+                    "content": tr.content,
+                    "is_error": tr.is_error,
+                })
+            })
+            .collect();
+        return json!({ "role": "user", "content": content_blocks });
+    }
+
+    if let Some(tool_call_id) = &msg.tool_call_id {
+        return json!({
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": tool_call_id,
+                "content": msg.content.clone(),
+                "is_error": false,
+            }]
+        });
+    }
+
+    if msg.has_images() || msg.has_documents() {
+        let mut content_blocks = Vec::new();
+
+        // Documents first. Anthropic's "document" block takes application/pdf only;
+        // text-based files are decoded and sent as text blocks.
+        if let Some(documents) = &msg.documents {
+            for doc in documents {
+                if doc.media_type == "application/pdf" {
+                    let mut doc_block = json!({
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": doc.media_type,
+                            "data": doc.data
+                        }
+                    });
+                    if msg.cache_control.is_some() {
+                        doc_block["cache_control"] = json!({ "type": "ephemeral" });
+                    }
+                    content_blocks.push(doc_block);
+                } else if doc.media_type.starts_with("text/")
+                    || doc.media_type == "application/json"
+                    || doc.media_type == "application/xml"
+                {
+                    if let Ok(decoded) =
+                        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &doc.data)
+                    {
+                        let text_content = String::from_utf8_lossy(&decoded);
+                        let label = doc.filename.as_deref().unwrap_or("document");
+                        content_blocks.push(json!({
+                            "type": "text",
+                            "text": format!("[File: {label} ({})]\n{text_content}", doc.media_type)
+                        }));
+                    } else {
+                        eprintln!(
+                            "[cnctd_ai] Failed to decode base64 for text document: {}",
+                            doc.filename.as_deref().unwrap_or("unknown")
+                        );
+                    }
+                } else {
+                    eprintln!(
+                        "[cnctd_ai] Skipping unsupported document type for Anthropic: {}",
+                        doc.media_type
+                    );
+                }
+            }
+        }
+
+        if let Some(images) = &msg.images {
+            for image in images {
+                content_blocks.push(json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": image.media_type,
+                        "data": image.data
+                    }
+                }));
+            }
+        }
+
+        if !msg.content.is_empty() {
+            let mut text_block = json!({ "type": "text", "text": msg.content.clone() });
+            if msg.cache_control.is_some() && msg.documents.is_none() {
+                text_block["cache_control"] = json!({ "type": "ephemeral" });
+            }
+            content_blocks.push(text_block);
+        }
+
+        return json!({ "role": "user", "content": content_blocks });
+    }
+
+    if msg.cache_control.is_some() {
+        return json!({
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": msg.content.clone(),
+                "cache_control": { "type": "ephemeral" }
+            }]
+        });
+    }
+
+    json!({ "role": "user", "content": msg.content.clone() })
+}
+
+/// An assistant turn. Anthropic-produced turns replay their original blocks;
+/// anything else is rebuilt from text + tool uses. Empty turns are dropped
+/// (the API rejects empty text content).
+fn assistant_message(msg: &crate::message::Message) -> Option<Value> {
+    if let Some(pc) = msg
+        .provider_content
+        .as_ref()
+        .filter(|pc| pc.is_for(ProviderContent::ANTHROPIC))
+    {
+        let blocks = replay_blocks(&pc.blocks);
+        if !blocks.is_empty() {
+            return Some(json!({ "role": "assistant", "content": blocks }));
+        }
+    }
+
+    if let Some(tool_uses) = &msg.tool_uses {
+        let mut content_blocks = Vec::new();
+        if !msg.content.is_empty() {
+            content_blocks.push(json!({ "type": "text", "text": msg.content.clone() }));
+        }
+        for tool_use in tool_uses {
+            content_blocks.push(json!({
+                "type": "tool_use",
+                "id": tool_use.id.clone(),
+                "name": tool_use.name.clone(),
+                "input": tool_use.input.clone(),
+            }));
+        }
+        return Some(json!({ "role": "assistant", "content": content_blocks }));
+    }
+
+    if msg.content.is_empty() {
+        return None;
+    }
+    Some(json!({ "role": "assistant", "content": msg.content.clone() }))
+}
+
+/// Reduce stored response blocks to their request shape. Thinking blocks keep
+/// their signature and text exactly; a thinking block without a signature
+/// (an interrupted stream) cannot be replayed and is dropped. Unknown block
+/// types (server tools) pass through unchanged.
+pub(crate) fn replay_blocks(blocks: &[Value]) -> Vec<Value> {
+    blocks
+        .iter()
+        .filter_map(|b| match b.get("type").and_then(Value::as_str) {
+            Some("thinking") => {
+                let signature = b.get("signature").and_then(Value::as_str).filter(|s| !s.is_empty())?;
+                Some(json!({
+                    "type": "thinking",
+                    "thinking": b.get("thinking").and_then(Value::as_str).unwrap_or_default(),
+                    "signature": signature,
+                }))
+            }
+            Some("redacted_thinking") => {
+                let data = b.get("data").and_then(Value::as_str)?;
+                Some(json!({ "type": "redacted_thinking", "data": data }))
+            }
+            Some("text") => {
+                let text = b.get("text").and_then(Value::as_str).unwrap_or_default();
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(json!({ "type": "text", "text": text }))
+                }
+            }
+            Some("tool_use") => Some(json!({
+                "type": "tool_use",
+                "id": b.get("id").cloned().unwrap_or(Value::Null),
+                "name": b.get("name").cloned().unwrap_or(Value::Null),
+                "input": b.get("input").filter(|v| v.is_object()).cloned().unwrap_or_else(|| json!({})),
+            })),
+            _ => Some(b.clone()),
+        })
+        .collect()
+}
+
+pub(crate) fn map_stop_reason(stop_reason: Option<&str>, has_tool_uses: bool) -> FinishReason {
+    match stop_reason {
+        Some("end_turn") | Some("stop_sequence") => FinishReason::Stop,
+        Some("max_tokens") | Some("model_context_window_exceeded") => FinishReason::Length,
+        Some("tool_use") => FinishReason::ToolUse,
+        Some("refusal") => FinishReason::Refusal,
+        _ if has_tool_uses => FinishReason::ToolUse,
+        _ => FinishReason::Other,
+    }
+}
+
+pub(crate) fn parse_refusal(stop_details: Option<&Value>) -> Refusal {
+    let details = stop_details.filter(|d| d.is_object());
+    Refusal {
+        category: details
+            .and_then(|d| d.get("category"))
+            .and_then(Value::as_str)
+            .map(String::from),
+        explanation: details
+            .and_then(|d| d.get("explanation"))
+            .and_then(Value::as_str)
+            .map(String::from),
+    }
+}
+
+/// Parse a non-streaming Messages API response.
+pub(crate) fn parse_message(json: &Value, fallback_model: &str) -> CompletionResponse {
+    let model = json
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or(fallback_model)
+        .to_string();
+    let blocks: Vec<Value> = json
+        .get("content")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut content = String::new();
+    let mut tool_uses = Vec::new();
+    for block in &blocks {
+        match block.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if let Some(text) = block.get("text").and_then(Value::as_str) {
+                    content.push_str(text);
+                }
+            }
+            Some("tool_use") => tool_uses.push(crate::ToolUse {
+                call_id: None,
+                id: block.get("id").and_then(Value::as_str).unwrap_or_default().to_string(),
+                name: block.get("name").and_then(Value::as_str).unwrap_or_default().to_string(),
+                input: block
+                    .get("input")
+                    .filter(|v| v.is_object())
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+            }),
+            _ => {}
+        }
+    }
+
+    let stop_reason = json.get("stop_reason").and_then(Value::as_str);
+    let finish_reason = map_stop_reason(stop_reason, !tool_uses.is_empty());
+    let refusal = (finish_reason == FinishReason::Refusal)
+        .then(|| parse_refusal(json.get("stop_details")));
+
+    let usage = json.get("usage");
+    let count = |key: &str| {
+        usage
+            .and_then(|u| u.get(key))
+            .and_then(Value::as_u64)
+            .map(|v| v as u32)
+    };
+    let prompt_tokens = count("input_tokens").unwrap_or(0);
+    let completion_tokens = count("output_tokens").unwrap_or(0);
+
+    let tool_uses_opt = if tool_uses.is_empty() { None } else { Some(tool_uses) };
+    let mut message = crate::message::Message::assistant(content);
+    message.tool_uses = tool_uses_opt.clone();
+    if !blocks.is_empty() {
+        message.provider_content = Some(ProviderContent::new(
+            ProviderContent::ANTHROPIC,
+            model.clone(),
+            blocks,
         ));
     }
-    
-    // Convert response to SSE stream
-    let stream = response.bytes_stream();
-    
-    Ok(CompletionStream::anthropic_custom(stream, config.model.clone()))
+
+    CompletionResponse {
+        message,
+        usage: Usage {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens: prompt_tokens + completion_tokens,
+            cache_creation_tokens: count("cache_creation_input_tokens"),
+            cache_read_tokens: count("cache_read_input_tokens"),
+        },
+        finish_reason,
+        model,
+        tool_uses: tool_uses_opt,
+        grounding_metadata: None,
+        code_execution_results: None,
+        google_maps_widget_token: None,
+        reasoning_items: None,
+        reasoning_summary: None,
+        citations: None,
+        refusal,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::Message;
+    use crate::request::RequestOptions;
+
+    fn config(model: &str) -> AnthropicConfig {
+        AnthropicConfig {
+            api_key: "k".into(),
+            model: model.into(),
+            version: None,
+        }
+    }
+
+    fn request(messages: Vec<Message>, options: RequestOptions) -> CompletionRequest {
+        CompletionRequest {
+            messages,
+            tools: None,
+            built_in_tools: None,
+            tool_config: None,
+            options: Some(options),
+        }
+    }
+
+    #[test]
+    fn thinking_and_effort_reach_the_body() {
+        let body = build_body(
+            &config("claude-opus-5-5"),
+            &request(
+                vec![Message::user("hi")],
+                RequestOptions {
+                    thinking: Some(Thinking::Adaptive),
+                    effort: Some(Effort::XHigh),
+                    max_tokens: Some(32000),
+                    ..Default::default()
+                },
+            ),
+            true,
+        );
+        assert_eq!(body["thinking"], json!({ "type": "adaptive" }));
+        assert_eq!(body["output_config"], json!({ "effort": "xhigh" }));
+        assert_eq!(body["max_tokens"], json!(32000));
+        assert_eq!(body["stream"], json!(true));
+        assert!(body.get("temperature").is_none());
+    }
+
+    #[test]
+    fn effort_below_low_maps_to_low() {
+        assert_eq!(anthropic_effort(Effort::None), "low");
+        assert_eq!(anthropic_effort(Effort::Minimal), "low");
+        assert_eq!(anthropic_effort(Effort::Max), "max");
+    }
+
+    #[test]
+    fn anthropic_turns_replay_their_blocks_in_order() {
+        let blocks = vec![
+            json!({ "type": "thinking", "thinking": "", "signature": "sig-1" }),
+            json!({ "type": "text", "text": "Checking.", "citations": null }),
+            json!({ "type": "thinking", "thinking": "", "signature": "sig-2" }),
+            json!({ "type": "tool_use", "id": "toolu_1", "name": "lookup", "input": { "q": "x" } }),
+            json!({ "type": "redacted_thinking", "data": "enc" }),
+            json!({ "type": "thinking", "thinking": "partial" }),
+        ];
+        let msg = Message::assistant("Checking.").with_provider_content(ProviderContent::new(
+            ProviderContent::ANTHROPIC,
+            "claude-opus-5-5",
+            blocks,
+        ));
+        let body = build_body(&config("claude-opus-5-5"), &request(vec![Message::user("q"), msg], RequestOptions::default()), false);
+        let content = &body["messages"][1]["content"];
+        assert_eq!(
+            content,
+            &json!([
+                { "type": "thinking", "thinking": "", "signature": "sig-1" },
+                { "type": "text", "text": "Checking." },
+                { "type": "thinking", "thinking": "", "signature": "sig-2" },
+                { "type": "tool_use", "id": "toolu_1", "name": "lookup", "input": { "q": "x" } },
+                { "type": "redacted_thinking", "data": "enc" }
+            ])
+        );
+    }
+
+    #[test]
+    fn other_provider_content_is_ignored_and_empty_turns_dropped() {
+        let gemini = Message::assistant("from gemini").with_provider_content(ProviderContent::new(
+            ProviderContent::GEMINI,
+            "gemini-3.8-flash",
+            vec![json!({ "text": "from gemini", "thoughtSignature": "x" })],
+        ));
+        let body = build_body(
+            &config("claude-sonnet-5-5"),
+            &request(vec![Message::user("a"), gemini, Message::user("b"), Message::assistant(""), Message::user("c")], RequestOptions::default()),
+            false,
+        );
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 4);
+        assert_eq!(msgs[1], json!({ "role": "assistant", "content": "from gemini" }));
+    }
+
+    #[test]
+    fn parses_refusal_with_details() {
+        let resp = parse_message(
+            &json!({
+                "model": "claude-opus-5-5",
+                "content": [],
+                "stop_reason": "refusal",
+                "stop_details": { "type": "refusal", "category": "cyber", "explanation": "no" },
+                "usage": { "input_tokens": 10, "output_tokens": 0 }
+            }),
+            "fallback",
+        );
+        assert_eq!(resp.finish_reason, FinishReason::Refusal);
+        assert_eq!(resp.refusal.as_ref().unwrap().category.as_deref(), Some("cyber"));
+        assert!(resp.message.provider_content.is_none());
+    }
+
+    #[test]
+    fn parses_thinking_tool_turn() {
+        let resp = parse_message(
+            &json!({
+                "model": "claude-opus-5-5",
+                "content": [
+                    { "type": "thinking", "thinking": "", "signature": "s" },
+                    { "type": "tool_use", "id": "t1", "name": "n", "input": {} }
+                ],
+                "stop_reason": "tool_use",
+                "usage": { "input_tokens": 5, "output_tokens": 7, "cache_read_input_tokens": 3 }
+            }),
+            "fallback",
+        );
+        assert_eq!(resp.finish_reason, FinishReason::ToolUse);
+        assert_eq!(resp.tool_uses.as_ref().unwrap()[0].id, "t1");
+        assert_eq!(resp.usage.cache_read_tokens, Some(3));
+        let pc = resp.message.provider_content.unwrap();
+        assert_eq!(pc.blocks.len(), 2);
+    }
 }

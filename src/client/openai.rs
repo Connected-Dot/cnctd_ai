@@ -166,6 +166,7 @@ pub(super) async fn complete(
         tool_call_id: None,
         tool_results: None,
         reasoning_items: None,
+        provider_content: None,
     };
 
     let usage = if let Some(usage) = &response.usage {
@@ -207,6 +208,7 @@ pub(super) async fn complete(
         reasoning_items: None,
         reasoning_summary: None,
         citations: None,
+        refusal: None,
     })
 }
 

@@ -284,6 +284,40 @@ pub struct Message {
     /// Reasoning items for OpenAI Responses API (GPT-5.2-pro)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_items: Option<Vec<serde_json::Value>>,
+    /// The assistant turn exactly as the provider returned it, for replay.
+    /// Anthropic thinking blocks and Gemini thought signatures must go back
+    /// unchanged in tool loops; `content` + `tool_uses` cannot carry them.
+    /// Used only when the request goes to the same provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_content: Option<ProviderContent>,
+}
+
+/// Raw provider blocks for an assistant turn (see [`Message::provider_content`]).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ProviderContent {
+    /// "anthropic" or "gemini"
+    pub provider: String,
+    /// Model that produced the blocks
+    pub model: String,
+    /// Anthropic: the `content` block array. Gemini: the model turn's `parts`.
+    pub blocks: Vec<serde_json::Value>,
+}
+
+impl ProviderContent {
+    pub const ANTHROPIC: &'static str = "anthropic";
+    pub const GEMINI: &'static str = "gemini";
+
+    pub fn new(provider: &str, model: impl Into<String>, blocks: Vec<serde_json::Value>) -> Self {
+        Self {
+            provider: provider.to_string(),
+            model: model.into(),
+            blocks,
+        }
+    }
+
+    pub fn is_for(&self, provider: &str) -> bool {
+        self.provider == provider && !self.blocks.is_empty()
+    }
 }
 
 impl Message {
@@ -299,6 +333,7 @@ impl Message {
             tool_call_id: None,
             tool_results: None,
             reasoning_items: None,
+            provider_content: None,
         }
     }
 
@@ -316,6 +351,7 @@ impl Message {
             tool_call_id: None,
             tool_results: None,
             reasoning_items: None,
+            provider_content: None,
         }
     }
 
@@ -336,6 +372,7 @@ impl Message {
             tool_call_id: None,
             tool_results: None,
             reasoning_items: None,
+            provider_content: None,
         }
     }
 
@@ -352,6 +389,7 @@ impl Message {
             tool_call_id: None,
             tool_results: None,
             reasoning_items: None,
+            provider_content: None,
         }
     }
 
@@ -372,6 +410,7 @@ impl Message {
             tool_call_id: None,
             tool_results: None,
             reasoning_items: None,
+            provider_content: None,
         }
     }
 
@@ -388,6 +427,7 @@ impl Message {
             tool_call_id: None,
             tool_results: None,
             reasoning_items: None,
+            provider_content: None,
         }
     }
 
@@ -408,6 +448,7 @@ impl Message {
             tool_call_id: None,
             tool_results: None,
             reasoning_items: None,
+            provider_content: None,
         }
     }
 
@@ -451,6 +492,7 @@ impl Message {
             tool_call_id: None,
             tool_results: None,
             reasoning_items: None,
+            provider_content: None,
         }
     }
 
@@ -466,6 +508,7 @@ impl Message {
             tool_call_id: None,
             tool_results: None,
             reasoning_items: None,
+            provider_content: None,
         }
     }
 
@@ -481,6 +524,7 @@ impl Message {
             tool_call_id: None,
             tool_results: None,
             reasoning_items: None,
+            provider_content: None,
         }
     }
 
@@ -497,6 +541,7 @@ impl Message {
             tool_call_id: None,
             tool_results: None,
             reasoning_items: None,
+            provider_content: None,
         }
     }
 
@@ -517,6 +562,7 @@ impl Message {
             tool_call_id: None,
             tool_results: None,
             reasoning_items: None,
+            provider_content: None,
         }
     }
 
@@ -540,6 +586,7 @@ impl Message {
             tool_call_id: None,
             tool_results: None,
             reasoning_items: None,
+            provider_content: None,
         }
     }
 
@@ -556,6 +603,7 @@ impl Message {
             tool_call_id: Some(tool_call_id),
             tool_results: None,
             reasoning_items: None,
+            provider_content: None,
         }
     }
 
@@ -577,6 +625,7 @@ impl Message {
                 Some(results)
             },
             reasoning_items: None,
+            provider_content: None,
         }
     }
 
@@ -622,6 +671,17 @@ impl Message {
     pub fn with_reasoning_items(mut self, items: Vec<serde_json::Value>) -> Self {
         self.reasoning_items = Some(items);
         self
+    }
+
+    /// Attach the provider's raw blocks for exact replay (see [`ProviderContent`]).
+    pub fn with_provider_content(mut self, content: ProviderContent) -> Self {
+        self.provider_content = Some(content);
+        self
+    }
+
+    /// Tool uses on this assistant message, if any.
+    pub fn tool_uses(&self) -> Option<&Vec<ToolUse>> {
+        self.tool_uses.as_ref()
     }
 
     /// Enable prompt caching for this message (Anthropic)

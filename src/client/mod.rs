@@ -1,9 +1,9 @@
 pub mod config;
 pub mod options;
-mod anthropic;
+pub(crate) mod anthropic;
 mod openai;
 mod openai_responses;
-mod gemini;
+pub(crate) mod gemini;
 
 pub use config::{AnthropicConfig, OpenAiConfig, GeminiConfig};
 pub use options::ClientOptions;

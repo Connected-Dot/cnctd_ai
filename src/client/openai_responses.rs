@@ -4,8 +4,8 @@
 //! all GPT-4, GPT-4.1, GPT-5, and reasoning models (o1, o3).
 
 use crate::error::Result;
-use crate::request::CompletionRequest;
-use crate::response::CompletionResponse;
+use crate::request::{CompletionRequest, Effort, Thinking};
+use crate::response::{CompletionResponse, FinishReason, Refusal};
 use crate::stream::CompletionStream;
 use super::config::OpenAiConfig;
 
@@ -18,12 +18,17 @@ use async_openai::types::responses::{
     FunctionToolCall as ResponsesFunctionToolCall, OutputStatus,
 };
 
-/// Check if a model is a reasoning model that requires encrypted_content for multi-turn
-fn is_reasoning_model(model: &str) -> bool {
+/// Whether to ask for encrypted reasoning content, which a stateless tool
+/// loop must echo back. True for every reasoning model family, and for any
+/// request that sets a reasoning effort other than `none`.
+fn wants_encrypted_reasoning(model: &str, request: &CompletionRequest) -> bool {
+    if let Some(effort) = effective_effort(request) {
+        return effort != Effort::None;
+    }
     let model_lower = model.to_lowercase();
-    model_lower.contains("o1")
-        || model_lower.contains("o3")
-        || model_lower.contains("gpt-5")
+    ["o1", "o3", "o4", "gpt-5", "gpt-6"]
+        .iter()
+        .any(|family| model_lower.starts_with(family))
 }
 
 /// Convert our Role to Responses API Role
@@ -201,31 +206,44 @@ fn build_tools(request: &CompletionRequest) -> Option<Vec<ResponsesTool>> {
     })
 }
 
-/// Non-streaming completion using Responses API
-pub(super) async fn complete(
-    sdk_client: &async_openai::Client<async_openai::config::OpenAIConfig>,
-    config: &OpenAiConfig,
-    request: &CompletionRequest,
-) -> Result<CompletionResponse> {
-    let input = build_input(request);
-    let tools = build_tools(request);
-    
-    let mut builder = CreateResponseArgs::default();
-    builder
-        .model(&config.model)
-        .input(input);
+/// async-openai 0.33's `ReasoningEffort` has no `max`, and the API echoes the
+/// request's effort inside every response object. Read `max` as `xhigh` so
+/// the typed response deserializes; nothing downstream reads the echo.
+fn normalize_effort(raw: &mut serde_json::Value) {
+    for path in ["/reasoning/effort", "/response/reasoning/effort"] {
+        if let Some(effort) = raw.pointer_mut(path).filter(|e| *e == "max") {
+            *effort = serde_json::json!("xhigh");
+        }
+    }
+}
 
-    // Include encrypted reasoning content for multi-turn tool calls with reasoning models (GPT-5.2-pro, o1, o3)
-    // This is required for stateless multi-turn conversations - only for reasoning models
-    if is_reasoning_model(&config.model) {
+/// `reasoning.effort` for this request: the explicit effort, or `none` when
+/// thinking is disabled.
+fn effective_effort(request: &CompletionRequest) -> Option<Effort> {
+    request.options.as_ref().and_then(|o| {
+        o.effort.or(match o.thinking {
+            Some(Thinking::Disabled) => Some(Effort::None),
+            _ => None,
+        })
+    })
+}
+
+/// Build the request with the typed builder, then add what async-openai 0.33
+/// cannot express (reasoning effort `max`) on the JSON.
+fn build_request_json(config: &OpenAiConfig, request: &CompletionRequest, stream: bool) -> Result<serde_json::Value> {
+    let mut builder = CreateResponseArgs::default();
+    builder.model(&config.model).input(build_input(request));
+    if stream {
+        // async-openai's create_stream skips auto-setting this when the
+        // `byot` feature is enabled (included via `full`).
+        builder.stream(true);
+    }
+    if wants_encrypted_reasoning(&config.model, request) {
         builder.include(vec![async_openai::types::responses::IncludeEnum::ReasoningEncryptedContent]);
     }
-
-    if let Some(t) = tools {
+    if let Some(t) = build_tools(request) {
         builder.tools(t);
     }
-
-    // Apply options
     if let Some(opts) = &request.options {
         if let Some(temp) = opts.temperature {
             builder.temperature(temp);
@@ -238,23 +256,43 @@ pub(super) async fn complete(
         }
     }
 
-    let create_request = builder.build()?;
+    let mut json = serde_json::to_value(builder.build()?)
+        .map_err(|e| crate::error::Error::Other(format!("Failed to serialize request: {}", e)))?;
 
-    let response = sdk_client
-        .responses()
-        .create(create_request)
-        .await?;
-    
-    // Extract text content and tool calls from output
+    if let Some(effort) = effective_effort(request) {
+        json["reasoning"] = serde_json::json!({ "effort": effort.as_str() });
+    }
+    Ok(json)
+}
+
+/// Non-streaming completion using Responses API
+pub(super) async fn complete(
+    sdk_client: &async_openai::Client<async_openai::config::OpenAIConfig>,
+    config: &OpenAiConfig,
+    request: &CompletionRequest,
+) -> Result<CompletionResponse> {
+    let body = build_request_json(config, request, false)?;
+    let mut raw: serde_json::Value = sdk_client.responses().create_byot(body).await?;
+    normalize_effort(&mut raw);
+    let response: async_openai::types::responses::Response = serde_json::from_value(raw.clone())
+        .map_err(|e| async_openai::error::OpenAIError::JSONDeserialize(e, raw.to_string()))?;
+
     let mut content = String::new();
+    let mut refusal_text = String::new();
+    let mut reasoning_summary = String::new();
     let mut tool_uses: Vec<crate::ToolUse> = Vec::new();
-    
+
     for output_item in &response.output {
         match output_item {
             OutputItem::Message(msg) => {
                 for c in &msg.content {
-                    if let async_openai::types::responses::OutputMessageContent::OutputText(text) = c {
-                        content.push_str(&text.text);
+                    match c {
+                        async_openai::types::responses::OutputMessageContent::OutputText(text) => {
+                            content.push_str(&text.text);
+                        }
+                        async_openai::types::responses::OutputMessageContent::Refusal(r) => {
+                            refusal_text.push_str(&r.refusal);
+                        }
                     }
                 }
             }
@@ -267,56 +305,59 @@ pub(super) async fn complete(
                         .unwrap_or_else(|_| serde_json::Value::String(fc.arguments.clone())),
                 });
             }
+            OutputItem::Reasoning(reasoning) => {
+                for part in &reasoning.summary {
+                    let async_openai::types::responses::SummaryPart::SummaryText(t) = part;
+                    if !reasoning_summary.is_empty() {
+                        reasoning_summary.push_str("\n\n");
+                    }
+                    reasoning_summary.push_str(&t.text);
+                }
+            }
             _ => {}
         }
     }
-    
-    let tool_uses_opt = if tool_uses.is_empty() { None } else { Some(tool_uses.clone()) };
-    
-    let message = crate::message::Message {
-        role: crate::message::Role::Assistant,
-        content,
-        images: None,
-        videos: None,
-        documents: None,
-        cache_control: None,
-        tool_uses: tool_uses_opt.clone(),
-        tool_call_id: None,
-        tool_results: None,
-        reasoning_items: None,
-    };
 
-    let usage = if let Some(u) = &response.usage {
-        crate::response::Usage {
+    let tool_uses_opt = if tool_uses.is_empty() { None } else { Some(tool_uses) };
+    let incomplete_reason = response
+        .incomplete_details
+        .as_ref()
+        .map(|d| d.reason.as_str())
+        .unwrap_or_default();
+
+    let mut refusal = None;
+    let finish_reason = match response.status {
+        _ if !refusal_text.is_empty() => {
+            refusal = Some(Refusal { category: None, explanation: Some(refusal_text.clone()) });
+            FinishReason::Refusal
+        }
+        async_openai::types::responses::Status::Incomplete if incomplete_reason == "content_filter" => {
+            refusal = Some(Refusal { category: Some("content_filter".to_string()), explanation: None });
+            FinishReason::Refusal
+        }
+        async_openai::types::responses::Status::Completed if tool_uses_opt.is_some() => FinishReason::ToolUse,
+        async_openai::types::responses::Status::Completed => FinishReason::Stop,
+        async_openai::types::responses::Status::Incomplete => FinishReason::Length,
+        _ => FinishReason::Other,
+    };
+    if !refusal_text.is_empty() && content.is_empty() {
+        content = refusal_text;
+    }
+
+    let mut message = crate::message::Message::assistant(content);
+    message.tool_uses = tool_uses_opt.clone();
+
+    let usage = match &response.usage {
+        Some(u) => crate::response::Usage {
             prompt_tokens: u.input_tokens,
             completion_tokens: u.output_tokens,
             total_tokens: u.total_tokens,
-            cache_creation_tokens: None, // OpenAI caching is automatic
-            cache_read_tokens: None,
-        }
-    } else {
-        crate::response::Usage {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
             cache_creation_tokens: None,
             cache_read_tokens: None,
-        }
+        },
+        None => crate::response::Usage::zero(),
     };
-    
-    let finish_reason = match response.status {
-        async_openai::types::responses::Status::Completed => {
-            if tool_uses_opt.is_some() {
-                crate::response::FinishReason::ToolUse
-            } else {
-                crate::response::FinishReason::Stop
-            }
-        }
-        async_openai::types::responses::Status::Failed => crate::response::FinishReason::Other,
-        async_openai::types::responses::Status::Incomplete => crate::response::FinishReason::Length,
-        _ => crate::response::FinishReason::Other,
-    };
-    
+
     Ok(CompletionResponse {
         message,
         usage,
@@ -327,8 +368,9 @@ pub(super) async fn complete(
         code_execution_results: None,
         google_maps_widget_token: None,
         reasoning_items: None,
-        reasoning_summary: None, // TODO: Extract from response if available
-        citations: None, // OpenAI doesn't support citations
+        reasoning_summary: if reasoning_summary.is_empty() { None } else { Some(reasoning_summary) },
+        citations: None,
+        refusal,
     })
 }
 
@@ -338,44 +380,72 @@ pub(super) async fn stream(
     config: &OpenAiConfig,
     request: &CompletionRequest,
 ) -> Result<CompletionStream> {
-    let input = build_input(request);
-    let tools = build_tools(request);
+    use futures::StreamExt;
 
-    let mut builder = CreateResponseArgs::default();
-    builder
-        .model(&config.model)
-        .input(input)
-        .stream(true); // Required: async-openai's create_stream skips auto-setting this when the `byot` feature is enabled (included via `full`)
-
-    // Include encrypted reasoning content for multi-turn tool calls with reasoning models (GPT-5.2-pro, o1, o3)
-    // This is required for stateless multi-turn conversations - only for reasoning models
-    if is_reasoning_model(&config.model) {
-        builder.include(vec![async_openai::types::responses::IncludeEnum::ReasoningEncryptedContent]);
-    }
-
-    if let Some(t) = tools {
-        builder.tools(t);
-    }
-
-    // Apply options
-    if let Some(opts) = &request.options {
-        if let Some(temp) = opts.temperature {
-            builder.temperature(temp);
-        }
-        if let Some(max_tokens) = opts.max_tokens {
-            builder.max_output_tokens(max_tokens);
-        }
-        if let Some(top_p) = opts.top_p {
-            builder.top_p(top_p);
-        }
-    }
-
-    let create_request = builder.build()?;
-
-    let stream = sdk_client
+    let body = build_request_json(config, request, true)?;
+    let raw_stream = sdk_client
         .responses()
-        .create_stream(create_request)
+        .create_stream_byot::<serde_json::Value, serde_json::Value>(body)
         .await?;
+    let stream = raw_stream.map(|item| {
+        item.and_then(|mut raw| {
+            normalize_effort(&mut raw);
+            serde_json::from_value::<async_openai::types::responses::ResponseStreamEvent>(raw.clone())
+                .map_err(|e| async_openai::error::OpenAIError::JSONDeserialize(e, raw.to_string()))
+        })
+    });
+    Ok(CompletionStream::openai_responses(Box::pin(stream), config.model.clone()))
+}
 
-    Ok(CompletionStream::openai_responses(stream, config.model.clone()))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::Message;
+    use crate::request::RequestOptions;
+
+    fn config(model: &str) -> OpenAiConfig {
+        OpenAiConfig { api_key: "k".into(), model: model.into(), organization: None, transcription_model: None }
+    }
+
+    fn request(options: Option<RequestOptions>) -> CompletionRequest {
+        CompletionRequest {
+            messages: vec![Message::user("hi")],
+            tools: None,
+            built_in_tools: None,
+            tool_config: None,
+            options,
+        }
+    }
+
+    #[test]
+    fn max_effort_and_encrypted_reasoning_for_gpt_6() {
+        let json = build_request_json(
+            &config("gpt-6.1-sol"),
+            &request(Some(RequestOptions { effort: Some(Effort::Max), ..Default::default() })),
+            true,
+        )
+        .unwrap();
+        assert_eq!(json["reasoning"], serde_json::json!({ "effort": "max" }));
+        assert_eq!(json["include"], serde_json::json!(["reasoning.encrypted_content"]));
+        assert_eq!(json["stream"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn non_reasoning_model_gets_no_reasoning_fields() {
+        let json = build_request_json(&config("gpt-4o-mini"), &request(None), false).unwrap();
+        assert!(json.get("reasoning").is_none());
+        assert!(json.get("include").is_none());
+    }
+
+    #[test]
+    fn effort_none_skips_encrypted_reasoning() {
+        let json = build_request_json(
+            &config("gpt-5.4"),
+            &request(Some(RequestOptions { thinking: Some(Thinking::Disabled), temperature: Some(0.1), ..Default::default() })),
+            false,
+        )
+        .unwrap();
+        assert_eq!(json["reasoning"], serde_json::json!({ "effort": "none" }));
+        assert!(json.get("include").is_none());
+    }
 }

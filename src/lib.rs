@@ -21,11 +21,11 @@ pub mod realtime;
 
 pub use client::{Client, ClientOptions, AnthropicConfig, OpenAiConfig, GeminiConfig};
 pub use error::{Error, Result};
-pub use message::{Message, Role, ToolResult, ImageContent, ContentPart, DocumentContent, CacheControl};
+pub use message::{Message, Role, ToolResult, ImageContent, ContentPart, DocumentContent, CacheControl, ProviderContent};
 pub use request::{
     CompletionRequest, RequestOptions, BuiltInTool,
     LatLng, RetrievalConfig, ToolConfig,
-    ThinkingLevel, MediaResolution, CitationConfig,
+    ThinkingLevel, MediaResolution, CitationConfig, Effort, Thinking,
     McpServerConfig, McpApprovalMode,
 };
 pub use tool::ToolUse;
@@ -33,7 +33,7 @@ pub use response::{
     CompletionResponse, Usage, FinishReason,
     GroundingMetadata, GroundingChunk, GroundingSupport, WebChunk, SearchEntryPoint,
     CodeExecutionResult, CodeExecutionOutcome,
-    Citation,
+    Citation, Refusal,
 };
 pub use agent_loop::{
     LoopConfig, LoopHandler, LoopResult, StopReason as AgentStopReason, ToolExecResult,

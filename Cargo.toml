@@ -1,6 +1,6 @@
 [package]
 name = "cnctd_ai"
-version = "0.1.30"
+version = "0.2.0"
 edition = "2024"
 authors = ["Connected Dot Inc.", "Kyle Ebner <kyle@cnctd.world>"]
 description = "Multi-provider AI/LLM abstraction layer with MCP support (Anthropic, OpenAI, Gemini, OpenRouter)"
@@ -28,7 +28,6 @@ rmcp = { version = "0.16.0", features = [
 reqwest = "0.12.28"
 async-openai = { version = "0.33.0", features = ["full"] }
 dotenvy = "0.15.7"
-anthropic-sdk-rust = "0.1.1"
 futures = "0.3.32"
 eventsource-stream = "0.2.3"
 bytes = "1.11.1"

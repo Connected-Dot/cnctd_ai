@@ -67,6 +67,19 @@ pub struct CompletionStream {
     inactivity_timeout: Option<std::time::Duration>,
     /// Once a terminal condition (timeout) fires, subsequent `next()` calls return `None`.
     terminated: bool,
+    /// Anthropic: the response content blocks, by stream index, as they
+    /// complete (thinking text + signature, redacted_thinking, text, tool_use).
+    anthropic_blocks: Vec<serde_json::Value>,
+    /// Anthropic: partial tool input JSON per block index.
+    anthropic_tool_json: std::collections::HashMap<usize, String>,
+    /// Gemini: the model turn's parts as received (thought signatures intact).
+    gemini_parts: Vec<serde_json::Value>,
+    /// Set when the request was declined.
+    refusal: Option<crate::response::Refusal>,
+    /// OpenAI reasoning summary text (kept out of the visible answer).
+    reasoning_summary: String,
+    /// A provider error event seen mid-stream, surfaced on the next `next()`.
+    pending_error: Option<crate::error::Error>,
 }
 
 /// Default inactivity timeout applied to every new `CompletionStream`.
@@ -82,46 +95,14 @@ impl CompletionStream {
         model: String,
     ) -> Self {
         let event_stream = stream.eventsource();
-        Self {
-            inner: StreamType::AnthropicCustom(Box::pin(event_stream)),
-            model,
-            accumulated_text: String::new(),
-            usage: None,
-            finish_reason: None,
-            tool_uses: Vec::new(),
-            grounding_metadata: None,
-            code_execution_results: Vec::new(),
-            google_maps_widget_token: None,
-            accumulated_function_args: std::collections::HashMap::new(),
-            pending_function_names: std::collections::HashMap::new(),
-            pending_call_ids: std::collections::HashMap::new(),
-            reasoning_items: Vec::new(),
-            inactivity_timeout: Some(DEFAULT_INACTIVITY_TIMEOUT),
-            terminated: false,
-        }
+        Self::with_inner(StreamType::AnthropicCustom(Box::pin(event_stream)), model)
     }
 
     pub fn openai(
         stream: async_openai::types::chat::ChatCompletionResponseStream,
         model: String,
     ) -> Self {
-        Self {
-            inner: StreamType::OpenAi(stream),
-            model,
-            accumulated_text: String::new(),
-            usage: None,
-            finish_reason: None,
-            tool_uses: Vec::new(),
-            grounding_metadata: None,
-            code_execution_results: Vec::new(),
-            google_maps_widget_token: None,
-            accumulated_function_args: std::collections::HashMap::new(),
-            pending_function_names: std::collections::HashMap::new(),
-            pending_call_ids: std::collections::HashMap::new(),
-            reasoning_items: Vec::new(),
-            inactivity_timeout: Some(DEFAULT_INACTIVITY_TIMEOUT),
-            terminated: false,
-        }
+        Self::with_inner(StreamType::OpenAi(stream), model)
     }
 
     /// Create a new stream for OpenAI Responses API
@@ -129,23 +110,7 @@ impl CompletionStream {
         stream: async_openai::types::responses::ResponseStream,
         model: String,
     ) -> Self {
-        Self {
-            inner: StreamType::OpenAiResponses(stream),
-            model,
-            accumulated_text: String::new(),
-            usage: None,
-            finish_reason: None,
-            tool_uses: Vec::new(),
-            grounding_metadata: None,
-            code_execution_results: Vec::new(),
-            google_maps_widget_token: None,
-            accumulated_function_args: std::collections::HashMap::new(),
-            pending_function_names: std::collections::HashMap::new(),
-            pending_call_ids: std::collections::HashMap::new(),
-            reasoning_items: Vec::new(),
-            inactivity_timeout: Some(DEFAULT_INACTIVITY_TIMEOUT),
-            terminated: false,
-        }
+        Self::with_inner(StreamType::OpenAiResponses(stream), model)
     }
 
     /// Create a new stream from a raw HTTP byte stream for Gemini
@@ -154,8 +119,12 @@ impl CompletionStream {
         model: String,
     ) -> Self {
         let event_stream = stream.eventsource();
+        Self::with_inner(StreamType::GeminiCustom(Box::pin(event_stream)), model)
+    }
+
+    fn with_inner(inner: StreamType, model: String) -> Self {
         Self {
-            inner: StreamType::GeminiCustom(Box::pin(event_stream)),
+            inner,
             model,
             accumulated_text: String::new(),
             usage: None,
@@ -170,6 +139,12 @@ impl CompletionStream {
             reasoning_items: Vec::new(),
             inactivity_timeout: Some(DEFAULT_INACTIVITY_TIMEOUT),
             terminated: false,
+            anthropic_blocks: Vec::new(),
+            anthropic_tool_json: std::collections::HashMap::new(),
+            gemini_parts: Vec::new(),
+            refusal: None,
+            reasoning_summary: String::new(),
+            pending_error: None,
         }
     }
 
@@ -212,6 +187,10 @@ impl CompletionStream {
     /// inactivity-timeout wrapper.
     async fn next_inner(&mut self) -> Option<Result<StreamChunk, crate::error::Error>> {
         loop {
+            if let Some(err) = self.pending_error.take() {
+                self.terminated = true;
+                return Some(Err(err));
+            }
             match &mut self.inner {
                 StreamType::AnthropicCustom(stream) => {
                     let event = match stream.next().await {
@@ -484,10 +463,17 @@ impl CompletionStream {
                     .unwrap_or_else(|_| serde_json::Value::String(e.arguments.clone()));
                 // Get the call_id from OutputItemAdded (required for function_call_output)
                 let call_id = self.pending_call_ids.get(&e.item_id).cloned();
+                // The done event usually omits the name; it came with
+                // OutputItemAdded. An empty name is rejected on replay.
+                let name = e
+                    .name
+                    .filter(|n| !n.is_empty())
+                    .or_else(|| self.pending_function_names.get(&e.item_id).cloned())
+                    .unwrap_or_default();
                 let tool_use = crate::tool::ToolUse {
                     id: e.item_id.clone(),
                     call_id,
-                    name: e.name.unwrap_or_default(),
+                    name,
                     input: args_value,
                 };
                 let event = ToolUseEvent::Complete(tool_use.clone());
@@ -531,6 +517,15 @@ impl CompletionStream {
                         .unwrap_or_else(|_| serde_json::Value::String(fc.arguments.clone()));
                     // Only add if not already present (check both ids)
                     let fc_id = fc.id.clone().unwrap_or_default();
+                    // The finished item is authoritative for name and call_id.
+                    if let Some(existing) = self.tool_uses.iter_mut().find(|tu| tu.id == fc_id) {
+                        if existing.name.is_empty() {
+                            existing.name = fc.name.clone();
+                        }
+                        if existing.call_id.is_none() {
+                            existing.call_id = Some(fc.call_id.clone());
+                        }
+                    }
                     if !self.tool_uses.iter().any(|tu| tu.id == fc_id) {
                         let tool_use = crate::tool::ToolUse {
                             id: fc_id,
@@ -553,6 +548,8 @@ impl CompletionStream {
                 // Set finish reason
                 self.finish_reason = Some(if !self.tool_uses.is_empty() {
                     crate::response::FinishReason::ToolUse
+                } else if self.refusal.is_some() {
+                    crate::response::FinishReason::Refusal
                 } else {
                     crate::response::FinishReason::Stop
                 });
@@ -582,11 +579,47 @@ impl CompletionStream {
                     tool_use_event: None,
                 })
             }
-            ResponseStreamEvent::ResponseIncomplete(_) => {
-                self.finish_reason = Some(crate::response::FinishReason::Length);
+            ResponseStreamEvent::ResponseIncomplete(e) => {
+                if let Some(usage) = &e.response.usage {
+                    self.usage = Some(crate::response::Usage {
+                        prompt_tokens: usage.input_tokens,
+                        completion_tokens: usage.output_tokens,
+                        total_tokens: usage.total_tokens,
+                        cache_creation_tokens: None,
+                        cache_read_tokens: None,
+                    });
+                }
+                let reason = e
+                    .response
+                    .incomplete_details
+                    .as_ref()
+                    .map(|d| d.reason.clone())
+                    .unwrap_or_default();
+                let finish = if reason == "content_filter" {
+                    self.refusal.get_or_insert_with(Default::default).category =
+                        Some("content_filter".to_string());
+                    crate::response::FinishReason::Refusal
+                } else {
+                    crate::response::FinishReason::Length
+                };
+                self.finish_reason = Some(finish.clone());
                 Some(StreamChunk {
                     delta: None,
-                    finish_reason: Some(crate::response::FinishReason::Length),
+                    finish_reason: Some(finish),
+                    tool_use_event: None,
+                })
+            }
+            // A refusal is user-facing text: show it, and mark the turn.
+            ResponseStreamEvent::ResponseRefusalDelta(e) => {
+                let refusal = self.refusal.get_or_insert_with(Default::default);
+                refusal
+                    .explanation
+                    .get_or_insert_with(String::new)
+                    .push_str(&e.delta);
+                self.accumulated_text.push_str(&e.delta);
+                Some(StreamChunk {
+                    delta: Some(e.delta),
+                    finish_reason: None,
                     tool_use_event: None,
                 })
             }
@@ -598,173 +631,170 @@ impl CompletionStream {
                     tool_use_event: None,
                 })
             }
-            // Reasoning events - expose reasoning summaries to caller
+            // Reasoning summaries are not part of the answer.
             ResponseStreamEvent::ResponseReasoningSummaryTextDelta(e) => {
-                Some(StreamChunk {
-                    delta: Some(e.delta),
-                    finish_reason: None,
-                    tool_use_event: None,
-                })
+                self.reasoning_summary.push_str(&e.delta);
+                None
             }
             _ => None
         }
     }
 
+    /// Handle one Anthropic SSE event. `None` ends the stream; `Some(None)`
+    /// continues to the next event.
     async fn handle_anthropic_sse_event(
         &mut self,
         event: eventsource_stream::Event,
     ) -> Option<Option<StreamChunk>> {
-        // Parse the event data as JSON
         let data = match serde_json::from_str::<serde_json::Value>(&event.data) {
             Ok(data) => data,
-            Err(_) => return Some(None), // Skip unparseable events
+            Err(_) => return Some(None),
         };
-
         let event_type = data["type"].as_str()?;
+        let index = data["index"].as_u64().unwrap_or(0) as usize;
 
         match event_type {
             "message_start" => {
-                // Extract initial usage info including cache usage
                 if let Some(usage) = data["message"]["usage"].as_object() {
                     let input_tokens = usage["input_tokens"].as_u64().unwrap_or(0) as u32;
                     let output_tokens = usage["output_tokens"].as_u64().unwrap_or(0) as u32;
-                    let cache_creation = usage.get("cache_creation_input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .map(|v| v as u32);
-                    let cache_read = usage.get("cache_read_input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .map(|v| v as u32);
+                    let count = |key: &str| usage.get(key).and_then(|v| v.as_u64()).map(|v| v as u32);
                     self.usage = Some(crate::response::Usage {
                         prompt_tokens: input_tokens,
                         completion_tokens: output_tokens,
                         total_tokens: input_tokens + output_tokens,
-                        cache_creation_tokens: cache_creation,
-                        cache_read_tokens: cache_read,
+                        cache_creation_tokens: count("cache_creation_input_tokens"),
+                        cache_read_tokens: count("cache_read_input_tokens"),
                     });
                 }
-                Some(None) // Continue to next event
+                Some(None)
             }
             "content_block_start" => {
-                // Check if this is a tool use block
-                if let Some(content_block) = data["content_block"].as_object() {
-                    if content_block["type"].as_str() == Some("tool_use") {
-                        // Create a new tool use with id and name
-                        let id = content_block["id"].as_str().unwrap_or("").to_string();
-                        let name = content_block["name"].as_str().unwrap_or("").to_string();
-                        self.tool_uses.push(crate::tool::ToolUse { call_id: None,
-                            id: id.clone(),
-                            name: name.clone(),
-                            input: serde_json::json!({}), // Will be filled by deltas
-                        });
-                        return Some(Some(StreamChunk {
-                            delta: None,
-                            finish_reason: None,
-                            tool_use_event: Some(ToolUseEvent::Start { id, name }),
-                        }));
-                    }
+                let block = data["content_block"].clone();
+                if self.anthropic_blocks.len() <= index {
+                    self.anthropic_blocks.resize(index + 1, serde_json::Value::Null);
                 }
-                Some(None) // Continue to next event
+                self.anthropic_blocks[index] = block.clone();
+                if block["type"].as_str() == Some("tool_use") {
+                    let id = block["id"].as_str().unwrap_or("").to_string();
+                    let name = block["name"].as_str().unwrap_or("").to_string();
+                    self.tool_uses.push(crate::tool::ToolUse {
+                        call_id: None,
+                        id: id.clone(),
+                        name: name.clone(),
+                        input: serde_json::json!({}),
+                    });
+                    return Some(Some(StreamChunk {
+                        delta: None,
+                        finish_reason: None,
+                        tool_use_event: Some(ToolUseEvent::Start { id, name }),
+                    }));
+                }
+                Some(None)
             }
             "content_block_delta" => {
-                // Check if this is a tool use input delta
-                if let Some(delta) = data["delta"].as_object() {
-                    if delta["type"].as_str() == Some("input_json_delta") {
-                        // Accumulate JSON input to the last tool
-                        if let (Some(partial_json), Some(last_tool)) = (delta["partial_json"].as_str(), self.tool_uses.last_mut()) {
-                            let tool_id = last_tool.id.clone();
-                            let json_fragment = partial_json.to_string();
-                            // Anthropic streams JSON as strings, accumulate and parse
-                            if let Some(current_input) = last_tool.input.as_str() {
-                                let combined = format!("{}{}", current_input, partial_json);
-                                // Try to parse, keep as string if invalid
-                                last_tool.input = serde_json::from_str(&combined)
-                                    .unwrap_or(serde_json::Value::String(combined));
-                            } else if last_tool.input.is_object() && last_tool.input.as_object().unwrap().is_empty() {
-                                // First chunk of input
-                                last_tool.input = serde_json::Value::String(partial_json.to_string());
-                            }
-                            return Some(Some(StreamChunk {
-                                delta: None,
-                                finish_reason: None,
-                                tool_use_event: Some(ToolUseEvent::InputDelta {
-                                    id: tool_id,
-                                    delta: json_fragment,
-                                }),
-                            }));
-                        }
-                        Some(None) // Continue, no text to return
-                    } else if let Some(text) = delta["text"].as_str() {
-                        // Existing text handling
+                let delta = &data["delta"];
+                let Some(block) = self.anthropic_blocks.get_mut(index) else {
+                    return Some(None);
+                };
+                match delta["type"].as_str() {
+                    Some("text_delta") => {
+                        let text = delta["text"].as_str().unwrap_or_default();
+                        append_str(block, "text", text);
                         self.accumulated_text.push_str(text);
                         Some(Some(StreamChunk {
                             delta: Some(text.to_string()),
                             finish_reason: None,
                             tool_use_event: None,
                         }))
-                    } else {
+                    }
+                    Some("input_json_delta") => {
+                        let fragment = delta["partial_json"].as_str().unwrap_or_default().to_string();
+                        let id = block["id"].as_str().unwrap_or_default().to_string();
+                        self.anthropic_tool_json
+                            .entry(index)
+                            .or_default()
+                            .push_str(&fragment);
+                        Some(Some(StreamChunk {
+                            delta: None,
+                            finish_reason: None,
+                            tool_use_event: Some(ToolUseEvent::InputDelta { id, delta: fragment }),
+                        }))
+                    }
+                    Some("thinking_delta") => {
+                        append_str(block, "thinking", delta["thinking"].as_str().unwrap_or_default());
                         Some(None)
                     }
-                } else {
-                    Some(None)
+                    Some("signature_delta") => {
+                        block["signature"] = delta["signature"].clone();
+                        Some(None)
+                    }
+                    _ => Some(None),
                 }
             }
             "content_block_stop" => {
-                // Finalize the last tool's JSON input if needed
-                let mut complete_event = None;
-                if let Some(last_tool) = self.tool_uses.last_mut() {
-                    if let Some(json_str) = last_tool.input.as_str() {
-                        // Try final parse of accumulated JSON
-                        // If parsing fails, fall back to empty object (API requires object, not string)
-                        last_tool.input = serde_json::from_str(json_str)
-                            .unwrap_or_else(|_| serde_json::json!({}));
-                    }
-                    // Ensure input is always an object - Anthropic API rejects string inputs
-                    if !last_tool.input.is_object() {
-                        last_tool.input = serde_json::json!({});
-                    }
-                    // Only emit Complete for tool_use blocks (not text blocks)
-                    if !last_tool.id.is_empty() {
-                        complete_event = Some(ToolUseEvent::Complete(last_tool.clone()));
-                    }
+                let Some(block) = self.anthropic_blocks.get_mut(index) else {
+                    return Some(None);
+                };
+                if block["type"].as_str() != Some("tool_use") {
+                    return Some(None);
                 }
-                if complete_event.is_some() {
-                    return Some(Some(StreamChunk {
-                        delta: None,
-                        finish_reason: None,
-                        tool_use_event: complete_event,
-                    }));
-                }
-                Some(None) // Continue to next event
+                // Tool input arrives as JSON fragments; the API rejects a
+                // non-object input when the turn is replayed.
+                let raw = self.anthropic_tool_json.remove(&index).unwrap_or_default();
+                let input = if raw.trim().is_empty() {
+                    serde_json::json!({})
+                } else {
+                    serde_json::from_str::<serde_json::Value>(&raw)
+                        .ok()
+                        .filter(|v| v.is_object())
+                        .unwrap_or_else(|| serde_json::json!({}))
+                };
+                block["input"] = input.clone();
+                let id = block["id"].as_str().unwrap_or_default().to_string();
+                let Some(tool) = self.tool_uses.iter_mut().find(|t| t.id == id) else {
+                    return Some(None);
+                };
+                tool.input = input;
+                Some(Some(StreamChunk {
+                    delta: None,
+                    finish_reason: None,
+                    tool_use_event: Some(ToolUseEvent::Complete(tool.clone())),
+                }))
             }
             "message_delta" => {
-                // Update usage and finish reason
-                if let Some(usage) = data["usage"].as_object() {
-                    let output_tokens = usage["output_tokens"].as_u64().unwrap_or(0) as u32;
+                if let Some(output_tokens) = data["usage"]["output_tokens"].as_u64() {
                     if let Some(existing_usage) = &mut self.usage {
-                        existing_usage.completion_tokens = output_tokens;
-                        existing_usage.total_tokens = existing_usage.prompt_tokens + output_tokens;
+                        existing_usage.completion_tokens = output_tokens as u32;
+                        existing_usage.total_tokens = existing_usage.prompt_tokens + output_tokens as u32;
                     }
                 }
-
                 if let Some(stop_reason) = data["delta"]["stop_reason"].as_str() {
-                    self.finish_reason = Some(match stop_reason {
-                        "end_turn" => crate::response::FinishReason::Stop,
-                        "max_tokens" => crate::response::FinishReason::Length,
-                        "stop_sequence" => crate::response::FinishReason::Stop,
-                        "tool_use" => crate::response::FinishReason::ToolUse,
-                        _ => crate::response::FinishReason::Other,
-                    });
+                    let finish = crate::client::anthropic::map_stop_reason(
+                        Some(stop_reason),
+                        !self.tool_uses.is_empty(),
+                    );
+                    if finish == crate::response::FinishReason::Refusal {
+                        let details = data["delta"]
+                            .get("stop_details")
+                            .or_else(|| data.get("stop_details"));
+                        self.refusal = Some(crate::client::anthropic::parse_refusal(details));
+                    }
+                    self.finish_reason = Some(finish);
                 }
-                Some(None) // Continue to next event
-            }
-            "message_stop" => {
-                // Stream complete
-                None
-            }
-            _ => {
-                // Unknown event type, skip
                 Some(None)
             }
+            "message_stop" => None,
+            "error" => {
+                let message = data["error"]["message"].as_str().unwrap_or("unknown error");
+                let kind = data["error"]["type"].as_str().unwrap_or("error");
+                self.pending_error = Some(crate::error::Error::AnthropicError(format!(
+                    "Stream error ({}): {}",
+                    kind, message
+                )));
+                Some(None)
+            }
+            _ => Some(None),
         }
     }
 
@@ -773,84 +803,76 @@ impl CompletionStream {
         &mut self,
         event: eventsource_stream::Event,
     ) -> Option<Option<StreamChunk>> {
-        // Parse the event data as JSON
         let data = match serde_json::from_str::<serde_json::Value>(&event.data) {
             Ok(data) => data,
-            Err(_) => return Some(None), // Skip unparseable events
+            Err(_) => return Some(None),
         };
 
-        // Extract candidate content
-        let candidate = match data["candidates"].get(0) {
-            Some(c) => c,
-            None => return Some(None), // No candidate yet
+        if let Some(usage_metadata) = data.get("usageMetadata") {
+            self.usage = Some(crate::client::gemini::parse_usage(usage_metadata));
+        }
+
+        // A blocked prompt comes back with no candidates and a block reason.
+        let Some(candidate) = data["candidates"].get(0) else {
+            if let Some(reason) = data["promptFeedback"]["blockReason"].as_str() {
+                self.refusal = Some(crate::response::Refusal {
+                    category: Some(reason.to_string()),
+                    explanation: data["promptFeedback"]["blockReasonMessage"]
+                        .as_str()
+                        .map(String::from),
+                });
+                self.finish_reason = Some(crate::response::FinishReason::Refusal);
+                return Some(Some(StreamChunk {
+                    delta: None,
+                    finish_reason: self.finish_reason.clone(),
+                    tool_use_event: None,
+                }));
+            }
+            return Some(None);
         };
 
-        // Extract grounding metadata if present (for search billing)
         if let Some(gm) = candidate.get("groundingMetadata") {
             if let Ok(metadata) = serde_json::from_value::<GroundingMetadata>(gm.clone()) {
                 self.grounding_metadata = Some(metadata);
             }
         }
-
-        // Extract Google Maps widget token if present
-        if let Some(token) = candidate.get("googleMapsWidgetContextToken") {
-            if let Some(token_str) = token.as_str() {
-                self.google_maps_widget_token = Some(token_str.to_string());
-            }
+        if let Some(token) = candidate["googleMapsWidgetContextToken"].as_str() {
+            self.google_maps_widget_token = Some(token.to_string());
         }
-
-        // Extract parts from content
-        let parts = match candidate["content"]["parts"].as_array() {
-            Some(p) => p,
-            None => return Some(None), // No parts
-        };
 
         let mut text_delta = String::new();
         let mut tool_event: Option<ToolUseEvent> = None;
 
-        for part in parts {
-            // Handle text content
+        for part in candidate["content"]["parts"].as_array().into_iter().flatten() {
+            crate::client::gemini::push_part(&mut self.gemini_parts, part);
+
+            // Thought summaries are not part of the answer.
+            let is_thought = part["thought"].as_bool().unwrap_or(false);
             if let Some(text) = part["text"].as_str() {
-                text_delta.push_str(text);
+                if !is_thought {
+                    text_delta.push_str(text);
+                }
             }
 
-            // Handle function calls
-            if let Some(function_call) = part["functionCall"].as_object() {
-                let name = function_call["name"].as_str().unwrap_or("").to_string();
-                let args = function_call.get("args").cloned().unwrap_or(serde_json::json!({}));
-
-                // Generate a unique ID (Gemini doesn't provide one)
-                let id = format!("gemini_call_{}", uuid::Uuid::new_v4());
-
-                let tool_use = crate::tool::ToolUse { call_id: None,
-                    id,
-                    name,
-                    input: args,
-                };
-                // Gemini sends complete tool calls, so emit Complete directly
+            if let Some(tool_use) = crate::client::gemini::function_call_to_tool_use(part) {
                 tool_event = Some(ToolUseEvent::Complete(tool_use.clone()));
                 self.tool_uses.push(tool_use);
             }
 
-            // Handle executable code part (for code execution billing)
             if let Some(executable_code) = part.get("executableCode") {
-                let code = executable_code["code"].as_str().map(|s| s.to_string());
-                let language = executable_code["language"].as_str().map(|s| s.to_string());
                 self.code_execution_results.push(CodeExecutionResult {
-                    code,
-                    language,
+                    code: executable_code["code"].as_str().map(|s| s.to_string()),
+                    language: executable_code["language"].as_str().map(|s| s.to_string()),
                     outcome: None,
                     output: None,
                 });
             }
 
-            // Handle code execution result part
             if let Some(code_result) = part.get("codeExecutionResult") {
-                let outcome = code_result["outcome"].as_str()
+                let outcome = code_result["outcome"]
+                    .as_str()
                     .and_then(|s| serde_json::from_value(serde_json::json!(s)).ok());
                 let output = code_result["output"].as_str().map(|s| s.to_string());
-                
-                // If we have a pending code execution, update it with results
                 if let Some(last) = self.code_execution_results.last_mut() {
                     if last.outcome.is_none() {
                         last.outcome = outcome;
@@ -858,7 +880,6 @@ impl CompletionStream {
                         continue;
                     }
                 }
-                // Otherwise create a new result entry
                 self.code_execution_results.push(CodeExecutionResult {
                     code: None,
                     language: None,
@@ -868,54 +889,27 @@ impl CompletionStream {
             }
         }
 
-        // Update usage if present
-        if let Some(usage_metadata) = data.get("usageMetadata") {
-            let prompt_tokens = usage_metadata["promptTokenCount"].as_u64().unwrap_or(0) as u32;
-            let completion_tokens = usage_metadata["candidatesTokenCount"].as_u64().unwrap_or(0) as u32;
-            let total_tokens = usage_metadata["totalTokenCount"].as_u64().unwrap_or(0) as u32;
-            // Gemini has different caching mechanism (Context Caching API)
-            let cached_tokens = usage_metadata.get("cachedContentTokenCount")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as u32);
-            self.usage = Some(crate::response::Usage {
-                prompt_tokens,
-                completion_tokens,
-                total_tokens,
-                cache_creation_tokens: None, // Gemini reports cached differently
-                cache_read_tokens: cached_tokens,
-            });
-        }
-
-        // Check for finish reason
         if let Some(finish_reason_str) = candidate["finishReason"].as_str() {
-            self.finish_reason = Some(match finish_reason_str {
-                "STOP" => crate::response::FinishReason::Stop,
-                "MAX_TOKENS" => crate::response::FinishReason::Length,
-                "SAFETY" => crate::response::FinishReason::ContentFilter,
-                "RECITATION" => crate::response::FinishReason::ContentFilter,
-                _ => {
-                    // Check if we have tool uses
-                    if !self.tool_uses.is_empty() {
-                        crate::response::FinishReason::ToolUse
-                    } else {
-                        crate::response::FinishReason::Other
-                    }
-                }
-            });
+            let finish = crate::client::gemini::map_finish_reason(finish_reason_str, !self.tool_uses.is_empty());
+            if finish == crate::response::FinishReason::Refusal {
+                self.refusal = Some(crate::response::Refusal {
+                    category: Some(finish_reason_str.to_string()),
+                    explanation: candidate["finishMessage"].as_str().map(String::from),
+                });
+            }
+            self.finish_reason = Some(finish);
         }
 
-        // Accumulate text
         if !text_delta.is_empty() {
             self.accumulated_text.push_str(&text_delta);
             return Some(Some(StreamChunk {
                 delta: Some(text_delta),
                 finish_reason: None,
-                tool_use_event: None,
+                tool_use_event: tool_event,
             }));
         }
 
-        // If we have tool uses or finish reason but no text, still return a chunk
-        if !self.tool_uses.is_empty() || self.finish_reason.is_some() {
+        if tool_event.is_some() || self.finish_reason.is_some() {
             return Some(Some(StreamChunk {
                 delta: None,
                 finish_reason: self.finish_reason.clone(),
@@ -923,62 +917,99 @@ impl CompletionStream {
             }));
         }
 
-        Some(None) // Continue to next event
+        Some(None)
     }
 
-    /// Get the final response after streaming completes
+    /// Get the final response after streaming completes.
+    ///
+    /// `None` when the model produced nothing at all. A turn that ended on a
+    /// refusal, a content filter, or the output limit is still returned (with
+    /// whatever text arrived) so callers can see why it stopped.
     pub fn final_response(&self) -> Option<crate::response::CompletionResponse> {
-        // Need either text or tool uses to have a response
-        if self.accumulated_text.is_empty() && self.tool_uses.is_empty() {
+        use crate::message::ProviderContent;
+        use crate::response::FinishReason;
+
+        let ended_with_reason = matches!(
+            self.finish_reason,
+            Some(FinishReason::Refusal) | Some(FinishReason::ContentFilter) | Some(FinishReason::Length)
+        );
+        if self.accumulated_text.is_empty() && self.tool_uses.is_empty() && !ended_with_reason {
             return None;
         }
 
-        let tool_uses_opt = if !self.tool_uses.is_empty() {
+        let tool_uses_opt = if self.tool_uses.is_empty() {
+            None
+        } else {
             Some(self.tool_uses.clone())
+        };
+        let reasoning_items = if self.reasoning_items.is_empty() {
+            None
+        } else {
+            Some(self.reasoning_items.clone())
+        };
+
+        let anthropic_blocks: Vec<serde_json::Value> = self
+            .anthropic_blocks
+            .iter()
+            .filter(|b| !b.is_null())
+            .cloned()
+            .collect();
+        let provider_content = if !anthropic_blocks.is_empty() {
+            Some(ProviderContent::new(ProviderContent::ANTHROPIC, self.model.clone(), anthropic_blocks))
+        } else if !self.gemini_parts.is_empty() {
+            Some(ProviderContent::new(ProviderContent::GEMINI, self.model.clone(), self.gemini_parts.clone()))
         } else {
             None
         };
 
-        let code_results_opt = if !self.code_execution_results.is_empty() {
-            Some(self.code_execution_results.clone())
-        } else {
-            None
-        };
+        let mut message = crate::message::Message::assistant(self.accumulated_text.clone());
+        message.tool_uses = tool_uses_opt.clone();
+        message.reasoning_items = reasoning_items.clone();
+        message.provider_content = provider_content;
+
+        let finish_reason = self.finish_reason.clone().unwrap_or(FinishReason::Other);
 
         Some(crate::response::CompletionResponse {
-            message: crate::message::Message {
-                role: crate::message::Role::Assistant,
-                content: self.accumulated_text.clone(),
-                images: None,
-                videos: None,
-                documents: None,
-                cache_control: None,
-                tool_uses: tool_uses_opt.clone(),
-                tool_call_id: None,
-                tool_results: None,
-                reasoning_items: if self.reasoning_items.is_empty() { None } else { Some(self.reasoning_items.clone()) },
+            message,
+            usage: self.usage.clone().unwrap_or_else(crate::response::Usage::zero),
+            refusal: if finish_reason == FinishReason::Refusal {
+                Some(self.refusal.clone().unwrap_or_default())
+            } else {
+                None
             },
-            usage: self.usage.clone().unwrap_or(crate::response::Usage {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-                total_tokens: 0,
-                cache_creation_tokens: None,
-                cache_read_tokens: None,
-            }),
-            finish_reason: self.finish_reason.clone().unwrap_or(crate::response::FinishReason::Other),
+            finish_reason,
             model: self.model.clone(),
             tool_uses: tool_uses_opt,
             grounding_metadata: self.grounding_metadata.clone(),
-            code_execution_results: code_results_opt,
+            code_execution_results: if self.code_execution_results.is_empty() {
+                None
+            } else {
+                Some(self.code_execution_results.clone())
+            },
             google_maps_widget_token: self.google_maps_widget_token.clone(),
-            reasoning_items: if self.reasoning_items.is_empty() { None } else { Some(self.reasoning_items.clone()) },
-            reasoning_summary: None, // TODO: Extract from reasoning_items if present
-            citations: None, // Not available in streaming (Anthropic)
+            reasoning_items,
+            reasoning_summary: if self.reasoning_summary.is_empty() {
+                None
+            } else {
+                Some(self.reasoning_summary.clone())
+            },
+            citations: None,
         })
     }
 
     pub fn tool_use(&self) -> Option<&crate::tool::ToolUse> {
         self.tool_uses.first()
+    }
+}
+
+/// Append to a string field of a JSON block in place.
+fn append_str(block: &mut serde_json::Value, key: &str, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    match block.get_mut(key) {
+        Some(serde_json::Value::String(existing)) => existing.push_str(text),
+        _ => block[key] = serde_json::Value::String(text.to_string()),
     }
 }
 

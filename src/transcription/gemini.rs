@@ -4,8 +4,10 @@ use super::{AudioInput, TranscriptionRequest, TranscriptionResponse, TranscriptS
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use serde::Deserialize;
 
-/// Default model for Gemini transcription
-const DEFAULT_MODEL: &str = "gemini-2.0-flash";
+/// Default model for Gemini transcription: the dedicated speech-to-text
+/// model (Interactions API). Any other Gemini model goes through
+/// generateContent with a transcription prompt.
+const DEFAULT_MODEL: &str = "gemini-3.5-transcribe";
 
 /// Maximum size for inline audio (20MB)
 const MAX_INLINE_SIZE: usize = 20 * 1024 * 1024;
@@ -23,6 +25,10 @@ pub(crate) async fn transcribe(
 
     // Get audio data and mime type
     let (audio_bytes, mime_type) = get_audio_data(&request.audio).await?;
+
+    if is_dedicated_transcribe_model(&model) {
+        return transcribe_interactions(config, &model, request, audio_bytes, mime_type).await;
+    }
 
     // Build the prompt for transcription
     let prompt = build_transcription_prompt(request);
@@ -506,4 +512,181 @@ fn parse_speaker(text: &str) -> Option<(String, &str)> {
     }
 
     None
+}
+
+
+/// `gemini-3.5-transcribe` and later dedicated speech models. They are served
+/// by the Interactions API, not generateContent.
+fn is_dedicated_transcribe_model(model: &str) -> bool {
+    model.contains("transcribe") && !model.ends_with("-live")
+}
+
+/// Transcribe with a dedicated speech model via `POST /v1beta/interactions`.
+/// Diarization and word timestamps come back as `word_info` annotations,
+/// grouped here into one segment per speaker turn.
+async fn transcribe_interactions(
+    config: &GeminiConfig,
+    model: &str,
+    request: &TranscriptionRequest,
+    audio_bytes: Vec<u8>,
+    mime_type: String,
+) -> Result<TranscriptionResponse> {
+    use base64::Engine;
+
+    let audio = if audio_bytes.len() > MAX_INLINE_SIZE {
+        let uri = upload_file(config, &audio_bytes, &mime_type).await?;
+        serde_json::json!({ "type": "audio", "uri": uri, "mime_type": mime_type })
+    } else {
+        serde_json::json!({
+            "type": "audio",
+            "data": base64::engine::general_purpose::STANDARD.encode(&audio_bytes),
+            "mime_type": mime_type,
+        })
+    };
+
+    let mut transcription_config = serde_json::Map::new();
+    if let Some(lang) = &request.language {
+        transcription_config.insert("language_codes".into(), serde_json::json!([lang]));
+    }
+    if request.diarization || request.timestamps {
+        let mut mode = serde_json::json!({ "type": "verbatim" });
+        if request.diarization {
+            mode["diarization_mode"] = serde_json::json!("speaker");
+        }
+        if request.timestamps {
+            mode["timestamp_granularities"] = serde_json::json!(["word"]);
+        }
+        transcription_config.insert("mode".into(), mode);
+    }
+
+    let mut body = serde_json::json!({ "model": model, "input": [audio] });
+    if !transcription_config.is_empty() {
+        body["generation_config"] = serde_json::json!({ "transcription_config": transcription_config });
+    }
+
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(
+        "x-goog-api-key",
+        HeaderValue::from_str(&config.api_key).map_err(|e| Error::Other(format!("Invalid API key: {}", e)))?,
+    );
+    let response = reqwest::Client::new()
+        .post("https://generativelanguage.googleapis.com/v1beta/interactions")
+        .headers(headers)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| Error::GeminiError(format!("HTTP request failed: {}", e)))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(Error::from_gemini_error(format!("HTTP {}: {}", status, error_text)));
+    }
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| Error::GeminiError(format!("Failed to parse response: {}", e)))?;
+    Ok(parse_interaction_transcript(&json, request))
+}
+
+/// "1.250s" -> 1.25
+fn parse_offset(value: Option<&serde_json::Value>) -> Option<f64> {
+    value?.as_str()?.trim_end_matches('s').parse().ok()
+}
+
+fn parse_interaction_transcript(json: &serde_json::Value, request: &TranscriptionRequest) -> TranscriptionResponse {
+    let mut text = String::new();
+    let mut words: Vec<&serde_json::Value> = Vec::new();
+    for step in json["steps"].as_array().into_iter().flatten() {
+        for content in step["content"].as_array().into_iter().flatten() {
+            if content["type"].as_str() != Some("text") {
+                continue;
+            }
+            if let Some(t) = content["text"].as_str() {
+                text.push_str(t);
+            }
+            words.extend(
+                content["annotations"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|a| a["type"].as_str() == Some("word_info")),
+            );
+        }
+    }
+
+    let mut segments: Vec<TranscriptSegment> = Vec::new();
+    let mut speaker_ids: Vec<String> = Vec::new();
+    for word in &words {
+        let speaker = word["speaker"].as_str().map(String::from);
+        let start = parse_offset(word.get("start_offset")).unwrap_or(0.0);
+        let end = parse_offset(word.get("end_offset")).unwrap_or(start);
+        let word_text = word["text"].as_str().unwrap_or_default();
+        if let Some(id) = &speaker {
+            if !speaker_ids.contains(id) {
+                speaker_ids.push(id.clone());
+            }
+        }
+        match segments.last_mut() {
+            Some(last) if last.speaker == speaker && (request.diarization || !request.timestamps) => {
+                last.end = end;
+                last.text.push(' ');
+                last.text.push_str(word_text);
+            }
+            _ => segments.push(TranscriptSegment { start, end, text: word_text.to_string(), speaker }),
+        }
+    }
+
+    let duration = segments.last().map(|s| s.end);
+    let speakers = (!speaker_ids.is_empty()).then(|| {
+        speaker_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| Speaker { id: id.clone(), label: Some(format!("Speaker {}", i + 1)) })
+            .collect()
+    });
+
+    TranscriptionResponse {
+        text: text.trim().to_string(),
+        segments: if segments.is_empty() { None } else { Some(segments) },
+        speakers,
+        language: request.language.clone(),
+        duration,
+    }
+}
+
+#[cfg(test)]
+mod interaction_tests {
+    use super::*;
+
+    #[test]
+    fn groups_words_into_speaker_turns() {
+        let json = serde_json::json!({
+            "steps": [{ "type": "model_output", "content": [{
+                "type": "text",
+                "text": "Hi there.Hello.",
+                "annotations": [
+                    { "type": "word_info", "text": "Hi", "speaker": "spk:0", "start_offset": "0s", "end_offset": "0.300s" },
+                    { "type": "word_info", "text": "there.", "speaker": "spk:0", "start_offset": "0.300s", "end_offset": "0.700s" },
+                    { "type": "word_info", "text": "Hello.", "speaker": "spk:1", "start_offset": "1.500s", "end_offset": "2.100s" }
+                ]
+            }]}]
+        });
+        let request = TranscriptionRequest::new("x.wav").with_diarization().with_timestamps();
+        let out = parse_interaction_transcript(&json, &request);
+        let segs = out.segments.unwrap();
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].text, "Hi there.");
+        assert_eq!(segs[0].speaker.as_deref(), Some("spk:0"));
+        assert_eq!(segs[1].start, 1.5);
+        assert_eq!(out.speakers.unwrap()[1].label.as_deref(), Some("Speaker 2"));
+        assert_eq!(out.duration, Some(2.1));
+    }
+
+    #[test]
+    fn dedicated_model_detection() {
+        assert!(is_dedicated_transcribe_model("gemini-3.5-transcribe"));
+        assert!(!is_dedicated_transcribe_model("gemini-3.5-transcribe-live"));
+        assert!(!is_dedicated_transcribe_model("gemini-3.6-flash"));
+    }
 }

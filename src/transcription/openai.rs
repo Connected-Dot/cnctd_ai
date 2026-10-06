@@ -23,6 +23,12 @@ pub(crate) async fn transcribe(
         .or_else(|| config.transcription_model.clone())
         .unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
+    // whisper-1 is the only model with verbose_json segments/timestamps; the
+    // gpt-* transcription models answer plain JSON and take different fields.
+    if !model.starts_with("whisper") {
+        return transcribe_gpt(sdk_client, &model, request).await;
+    }
+
     // Convert our AudioInput to OpenAI's InputSource
     let input_source = match &request.audio {
         AudioInput::FilePath(path) => InputSource::Path { path: path.clone() },
@@ -138,4 +144,97 @@ fn mime_type_to_extension(mime_type: &str) -> &str {
         "audio/flac" => "flac",
         _ => "mp3", // Default
     }
+}
+
+
+/// Read the audio into memory with a filename the API can type it by.
+async fn read_audio(input: &AudioInput) -> Result<(Vec<u8>, String)> {
+    match input {
+        AudioInput::FilePath(path) => {
+            let data = tokio::fs::read(path)
+                .await
+                .map_err(|e| Error::Other(format!("Failed to read audio file: {}", e)))?;
+            let filename = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "audio.mp3".to_string());
+            Ok((data, filename))
+        }
+        AudioInput::Url(url) => {
+            let response = reqwest::get(url)
+                .await
+                .map_err(|e| Error::Other(format!("Failed to fetch audio from URL: {}", e)))?;
+            if !response.status().is_success() {
+                return Err(Error::Other(format!("Failed to fetch audio: HTTP {}", response.status())));
+            }
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| Error::Other(format!("Failed to read audio bytes: {}", e)))?;
+            let filename = url
+                .split('/')
+                .last()
+                .and_then(|s| s.split('?').next())
+                .filter(|s| s.contains('.'))
+                .unwrap_or("audio.mp3")
+                .to_string();
+            Ok((bytes.to_vec(), filename))
+        }
+        AudioInput::Bytes { data, mime_type } => {
+            Ok((data.clone(), format!("audio.{}", mime_type_to_extension(mime_type))))
+        }
+    }
+}
+
+/// `gpt-transcribe` (and the gpt-4o transcribe family) over multipart. These
+/// return `{ text, languages: [{ code }] }`; `gpt-transcribe` takes
+/// `languages[]` where older models take a single `language`.
+async fn transcribe_gpt(
+    sdk_client: &async_openai::Client<async_openai::config::OpenAIConfig>,
+    model: &str,
+    request: &TranscriptionRequest,
+) -> Result<TranscriptionResponse> {
+    use async_openai::config::Config;
+
+    let (data, filename) = read_audio(&request.audio).await?;
+    let mut form = reqwest::multipart::Form::new()
+        .text("model", model.to_string())
+        .text("response_format", "json")
+        .part("file", reqwest::multipart::Part::bytes(data).file_name(filename));
+    if let Some(prompt) = &request.prompt {
+        form = form.text("prompt", prompt.clone());
+    }
+    if let Some(lang) = &request.language {
+        let field = if model.starts_with("gpt-transcribe") { "languages[]" } else { "language" };
+        form = form.text(field, lang.clone());
+    }
+
+    let config = sdk_client.config();
+    let response = reqwest::Client::new()
+        .post(config.url("/audio/transcriptions"))
+        .headers(config.headers())
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| Error::Other(format!("HTTP request failed: {}", e)))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
+        return Err(Error::Other(format!("OpenAI transcription HTTP {}: {}", status, error_text)));
+    }
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| Error::Other(format!("Failed to parse transcription: {}", e)))?;
+
+    Ok(TranscriptionResponse {
+        text: json["text"].as_str().unwrap_or_default().trim().to_string(),
+        segments: None,
+        speakers: None,
+        language: json["languages"][0]["code"]
+            .as_str()
+            .map(String::from)
+            .or_else(|| request.language.clone()),
+        duration: json["duration"].as_f64(),
+    })
 }

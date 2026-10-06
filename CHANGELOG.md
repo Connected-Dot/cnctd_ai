@@ -2,6 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-10-06
+
+Model-aware requests for the 2026 model generations (Claude Opus 5.5 /
+Sonnet 5.5 / Fable 5.1, GPT-6 / GPT-5.6, Gemini 3.5-3.8). Breaking: new
+fields on public structs and a new `FinishReason` variant.
+
+### Added
+- **Thinking and effort controls**: `RequestOptions::thinking` ([`Thinking`]:
+  `Adaptive`, `Budget`, `BetweenTools`, `Disabled`) and `RequestOptions::effort`
+  ([`Effort`]: `none`..`max`). Anthropic sends `thinking` + `output_config.effort`,
+  OpenAI `reasoning.effort` (including `max`, which async-openai 0.33 lacks),
+  Gemini `thinkingConfig` (`thinkingLevel` from effort, `thinkingBudget` from
+  `Budget`/`Disabled`). `ThinkingLevel` gains `Minimal` and `Medium`.
+- **Exact replay of reasoning**: `Message::provider_content` ([`ProviderContent`])
+  carries the provider's raw assistant blocks. Anthropic thinking /
+  redacted_thinking blocks (with signatures) and Gemini parts (with
+  thoughtSignature) are captured from streaming and non-streaming responses
+  and replayed unchanged to the same provider. Required inside a tool loop.
+- **Refusals**: `FinishReason::Refusal` and `CompletionResponse::refusal`
+  ([`Refusal`]: category + explanation) from Anthropic `stop_reason: refusal`
+  + `stop_details`, Gemini safety finish reasons and blocked prompts
+  (`promptFeedback.blockReason`), OpenAI refusal content and
+  `content_filter` incompletes. A refused stream still yields a final response.
+- **`LoopResult::messages`** (every message the loop added, in order) and
+  **`LoopResult::usage`** (summed across all rounds).
+- **Transcription**: `gemini-3.5-transcribe` (Interactions API, diarization +
+  word timestamps grouped into speaker segments; now the Gemini default) and
+  `gpt-transcribe` (multipart, `languages[]`, detected language).
+- Gemini `media_resolution` and `stop_sequences` are now sent; Anthropic
+  `stop_sequences` too.
+- `examples/live_model_check.rs`: live tool-loop / replay / transcription check
+  across all three providers.
+
+### Fixed
+- **Agent loop tool results** now carry the function name (Gemini matched
+  results to "function") and the OpenAI `call_id`, and set `is_error` on
+  failed tools.
+- **OpenAI streamed tool calls** had an empty name (the arguments-done event
+  omits it), which the API rejected on replay. OpenAI tool loops work again.
+- **Gemini function calls** keep Gemini's call `id` and send it back on the
+  `functionResponse`; Gemini usage now counts thinking tokens as output.
+- **Anthropic stream**: the tool "complete" event fired again on every later
+  block stop (duplicate events with interleaved thinking); mid-stream `error`
+  events now surface as errors; cache read/write tokens are reported.
+- OpenAI reasoning-summary deltas no longer leak into the answer text.
+- Reasoning-model detection covers `gpt-6*` and `o4*`.
+
+### Changed
+- Anthropic non-streaming completions use the same raw-HTTP request builder
+  as streaming; the `anthropic-sdk-rust` dependency is removed. The obsolete
+  `prompt-caching-2024-07-31` beta header is no longer sent (caching is GA).
+- Empty assistant turns are dropped from Anthropic and Gemini requests.
+
 ## [0.1.20] - 2026-02-03
 
 ### Added

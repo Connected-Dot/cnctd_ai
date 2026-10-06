@@ -1,5 +1,5 @@
+use crate::{message::Message, Tool};
 use serde::{Deserialize, Serialize};
-use crate::{Tool, message::Message};
 
 /// Built-in tools provided by AI providers (not MCP tools)
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -40,10 +40,105 @@ pub enum BuiltInTool {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ThinkingLevel {
+    /// Close to no thinking (Gemini 3 Flash / Flash-Lite; not 3.1 Pro, 3.7/3.8 Flash)
+    Minimal,
     /// Minimizes latency and cost, best for simple tasks
     Low,
-    /// Default - maximizes reasoning depth, may take longer
+    /// Balanced (the default on Gemini 3.5+ Flash)
+    Medium,
+    /// Maximizes reasoning depth, may take longer
     High,
+}
+
+impl ThinkingLevel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ThinkingLevel::Minimal => "minimal",
+            ThinkingLevel::Low => "low",
+            ThinkingLevel::Medium => "medium",
+            ThinkingLevel::High => "high",
+        }
+    }
+}
+
+/// How much work the model puts into a response, thinking included.
+///
+/// One scale for every provider; each maps the levels it has:
+/// - Anthropic: `output_config.effort` (`low`..`max`; `none`/`minimal` send `low`)
+/// - OpenAI Responses: `reasoning.effort` (`none`..`max`, passed through)
+/// - Gemini 3: `thinkingConfig.thinkingLevel` when `thinking_level` is not set
+///   (`none`/`minimal` -> minimal, `xhigh`/`max` -> high)
+///
+/// The library does not know which levels a given model accepts; the caller
+/// picks a level the model supports.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Effort {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+impl Effort {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Effort::None => "none",
+            Effort::Minimal => "minimal",
+            Effort::Low => "low",
+            Effort::Medium => "medium",
+            Effort::High => "high",
+            Effort::XHigh => "xhigh",
+            Effort::Max => "max",
+        }
+    }
+
+    /// Parse the lowercase wire names used by every provider.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "none" => Some(Effort::None),
+            "minimal" => Some(Effort::Minimal),
+            "low" => Some(Effort::Low),
+            "medium" => Some(Effort::Medium),
+            "high" => Some(Effort::High),
+            "xhigh" => Some(Effort::XHigh),
+            "max" => Some(Effort::Max),
+            _ => None,
+        }
+    }
+
+    /// Gemini 3 thinking level for this effort.
+    pub fn to_thinking_level(self) -> ThinkingLevel {
+        match self {
+            Effort::None | Effort::Minimal => ThinkingLevel::Minimal,
+            Effort::Low => ThinkingLevel::Low,
+            Effort::Medium => ThinkingLevel::Medium,
+            Effort::High | Effort::XHigh | Effort::Max => ThinkingLevel::High,
+        }
+    }
+}
+
+/// Whether and how the model thinks before answering.
+///
+/// - Anthropic: the `thinking` parameter (`adaptive`, `enabled` + `budget_tokens`,
+///   `between_tools`, `disabled`). Which values a model accepts varies by model.
+/// - Gemini: `Budget` -> `thinkingBudget`, `Disabled` -> `thinkingBudget: 0`
+///   (Gemini 2.5 only; Gemini 3 cannot fully disable thinking). `Adaptive`
+///   leaves the model's dynamic default.
+/// - OpenAI: `Disabled` -> `reasoning.effort: none` when `effort` is unset.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Thinking {
+    Adaptive,
+    Budget {
+        tokens: u32,
+    },
+    /// Anthropic Claude Sonnet 5.5: no up-front thinking, progress notes between tools.
+    BetweenTools,
+    Disabled,
 }
 
 /// Media resolution for Gemini 3 vision (controls token usage vs detail)
@@ -179,7 +274,10 @@ impl CompletionRequest {
     /// Set location for Google Maps queries
     pub fn with_location(mut self, latitude: f64, longitude: f64) -> Self {
         let retrieval_config = RetrievalConfig {
-            lat_lng: Some(LatLng { latitude, longitude }),
+            lat_lng: Some(LatLng {
+                latitude,
+                longitude,
+            }),
             language_code: None,
         };
         if let Some(ref mut config) = self.tool_config {
@@ -236,7 +334,12 @@ impl CompletionRequest {
     }
 
     /// Add an OpenAI native MCP server
-    pub fn with_mcp_server(mut self, url: &str, label: &str, require_approval: Option<McpApprovalMode>) -> Self {
+    pub fn with_mcp_server(
+        mut self,
+        url: &str,
+        label: &str,
+        require_approval: Option<McpApprovalMode>,
+    ) -> Self {
         let options = self.options.get_or_insert_with(RequestOptions::default);
         let servers = options.mcp_servers.get_or_insert_with(Vec::new);
         servers.push(McpServerConfig {
@@ -277,9 +380,19 @@ pub struct RequestOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub citations: Option<CitationConfig>,
 
-    /// Thinking level for Gemini 3 models (Low = fast, High = deep reasoning)
+    /// Thinking level for Gemini 3 models. Takes precedence over `effort` there.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<ThinkingLevel>,
+
+    /// Whether and how the model thinks (see [`Thinking`]). `None` = the
+    /// model's own default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<Thinking>,
+
+    /// How much work the model puts in (see [`Effort`]). `None` = the model's
+    /// own default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
 
     /// Media resolution for Gemini 3 vision (controls token usage vs detail)
     #[serde(skip_serializing_if = "Option::is_none")]
