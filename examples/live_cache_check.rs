@@ -9,13 +9,13 @@
 //! ANTHROPIC_API_KEY=... OPENAI_API_KEY=... GEMINI_API_KEY=... \
 //!   cargo run --example live_cache_check
 //! ```
-//! Set `ONLY=anthropic|openai|gemini` to run one group.
+//! Set `ONLY=anthropic|thinking|openai|gemini` to run one group.
 
 use async_trait::async_trait;
 use cnctd_ai::agent_loop::{LoopHandler, ToolExecResult, ToolExecutor};
 use cnctd_ai::{
     create_tool, run_agent_loop, AnthropicConfig, CacheControl, Client, CompletionRequest, GeminiConfig, LoopConfig,
-    Message, OpenAiConfig, PromptCache, RequestOptions, Usage,
+    Effort, Message, OpenAiConfig, PromptCache, RequestOptions, Thinking, Usage,
 };
 use serde_json::json;
 
@@ -77,10 +77,12 @@ fn check(label: &str, ok: bool, failures: &mut Vec<String>) {
 
 /// Two chat turns through the agent loop (streamed), then the second turn
 /// again through a plain non-streamed call.
-async fn anthropic_case(model: &str, client: &Client, failures: &mut Vec<String>) {
-    println!("== {model}");
+async fn anthropic_case(model: &str, client: &Client, thinking: Option<(Thinking, Effort)>, failures: &mut Vec<String>) {
+    println!("== {model}{}", thinking.as_ref().map(|(t, e)| format!(" ({t:?}, effort {})", e.as_str())).unwrap_or_default());
     let options = RequestOptions {
-        max_tokens: Some(4000),
+        max_tokens: Some(16000),
+        thinking: thinking.as_ref().map(|(t, _)| t.clone()),
+        effort: thinking.as_ref().map(|(_, e)| *e),
         prompt_cache: Some(PromptCache {
             tools: Some(CacheControl::Extended),
             tail: Some(CacheControl::Ephemeral),
@@ -104,6 +106,15 @@ async fn anthropic_case(model: &str, client: &Client, failures: &mut Vec<String>
         Err(e) => return check(&format!("{model} turn 1: {e}"), false, failures),
     };
     show(&format!("turn 1 ({} rounds)", turn1.iterations), &turn1.usage);
+    let thinking_blocks: usize = turn1
+        .messages
+        .iter()
+        .filter_map(|m| m.provider_content.as_ref())
+        .map(|pc| pc.blocks.iter().filter(|b| b["type"] == "thinking").count())
+        .sum();
+    if thinking.is_some() {
+        println!("  turn 1 thinking blocks replayed into turn 2: {thinking_blocks}");
+    }
     check(&format!("{model} turn 1 wrote the cache"), turn1.usage.cache_creation_tokens.unwrap_or(0) > 4000, failures);
     check(&format!("{model} turn 1 wrote 1h entries"), turn1.usage.cache_creation_1h_tokens.unwrap_or(0) > 4000, failures);
     check(&format!("{model} turn 1 later rounds read the earlier ones"), turn1.usage.cache_read_tokens.unwrap_or(0) > 4000, failures);
@@ -201,8 +212,13 @@ async fn main() {
 
     if run("anthropic") {
         for model in ["claude-sonnet-5-5", "claude-haiku-4-5"] {
-            anthropic_case(model, &anthropic(model), &mut failures).await;
+            anthropic_case(model, &anthropic(model), None, &mut failures).await;
         }
+    }
+    if run("thinking") {
+        // How chat runs: adaptive thinking, thinking blocks replayed in history.
+        let model = "claude-opus-5-5";
+        anthropic_case(model, &anthropic(model), Some((Thinking::Adaptive, Effort::High)), &mut failures).await;
     }
     if run("openai") {
         let client = Client::openai(
