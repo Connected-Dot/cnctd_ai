@@ -82,6 +82,27 @@ pub struct CompletionStream {
     pending_error: Option<crate::error::Error>,
 }
 
+/// One read from a provider stream, bounded by the inactivity timeout: the
+/// provider's next event (any event, a text delta or an empty thinking delta
+/// alike) within `timeout`, or `Error::StreamInactivityTimeout`.
+async fn bounded_read<S>(
+    stream: &mut S,
+    timeout: Option<std::time::Duration>,
+) -> Result<Option<S::Item>, crate::error::Error>
+where
+    S: futures::Stream + Unpin,
+{
+    match timeout {
+        Some(t) => match tokio::time::timeout(t, stream.next()).await {
+            Ok(item) => Ok(item),
+            Err(_) => Err(crate::error::Error::StreamInactivityTimeout {
+                elapsed_ms: t.as_millis() as u64,
+            }),
+        },
+        None => Ok(stream.next().await),
+    }
+}
+
 /// Default inactivity timeout applied to every new `CompletionStream`.
 const DEFAULT_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
@@ -169,23 +190,17 @@ impl CompletionStream {
         if self.terminated {
             return None;
         }
-        match self.inactivity_timeout {
-            Some(timeout) => match tokio::time::timeout(timeout, self.next_inner()).await {
-                Ok(result) => result,
-                Err(_) => {
-                    self.terminated = true;
-                    Some(Err(crate::error::Error::StreamInactivityTimeout {
-                        elapsed_ms: timeout.as_millis() as u64,
-                    }))
-                }
-            },
-            None => self.next_inner().await,
-        }
+        self.next_inner().await
     }
 
-    /// Inner stream-pump loop. Public callers go through `next()` which adds the
-    /// inactivity-timeout wrapper.
+    /// Inner stream-pump loop. The inactivity timeout bounds EACH provider read
+    /// (`bounded_read`), not the whole pump: a model thinking under
+    /// `display: "omitted"` sends `thinking_delta` events with no text for as
+    /// long as it thinks, and none of them becomes a chunk. Bounding the pump
+    /// as a whole counted that as silence and killed every turn whose thinking
+    /// ran past the timeout (Opus 5.5, 2026-10-12). Provider bytes are activity.
     async fn next_inner(&mut self) -> Option<Result<StreamChunk, crate::error::Error>> {
+        let inactivity = self.inactivity_timeout;
         loop {
             if let Some(err) = self.pending_error.take() {
                 self.terminated = true;
@@ -193,14 +208,18 @@ impl CompletionStream {
             }
             match &mut self.inner {
                 StreamType::AnthropicCustom(stream) => {
-                    let event = match stream.next().await {
-                        Some(Ok(event)) => event,
-                        Some(Err(e)) => {
+                    let event = match bounded_read(stream, inactivity).await {
+                        Err(e) => {
+                            self.terminated = true;
+                            return Some(Err(e));
+                        }
+                        Ok(Some(Ok(event))) => event,
+                        Ok(Some(Err(e))) => {
                             return Some(Err(crate::error::Error::Other(
                                 format!("Stream error: {}", e)
                             )));
                         }
-                        None => return None,
+                        Ok(None) => return None,
                     };
                     // Parse the SSE event
                     if let Some(chunk) = self.handle_anthropic_sse_event(event).await? {
@@ -209,7 +228,14 @@ impl CompletionStream {
                     // If no chunk returned, continue to next event
                 }
                 StreamType::OpenAi(stream) => {
-                    match stream.next().await {
+                    let read = match bounded_read(stream, inactivity).await {
+                        Err(e) => {
+                            self.terminated = true;
+                            return Some(Err(e));
+                        }
+                        Ok(read) => read,
+                    };
+                    match read {
                         Some(Ok(response)) => {
                             let mut has_usage_update = false;
                             
@@ -326,7 +352,14 @@ impl CompletionStream {
                         return None;
                     }
 
-                    match stream.next().await {
+                    let read = match bounded_read(stream, inactivity).await {
+                        Err(e) => {
+                            self.terminated = true;
+                            return Some(Err(e));
+                        }
+                        Ok(read) => read,
+                    };
+                    match read {
                         Some(Ok(event)) => {
                             if let Some(chunk) = self.handle_openai_responses_event(event) {
                                 return Some(Ok(chunk));
@@ -349,14 +382,18 @@ impl CompletionStream {
                     }
                 }
                 StreamType::GeminiCustom(stream) => {
-                    let event = match stream.next().await {
-                        Some(Ok(event)) => event,
-                        Some(Err(e)) => {
+                    let event = match bounded_read(stream, inactivity).await {
+                        Err(e) => {
+                            self.terminated = true;
+                            return Some(Err(e));
+                        }
+                        Ok(Some(Ok(event))) => event,
+                        Ok(Some(Err(e))) => {
                             return Some(Err(crate::error::Error::GeminiError(
                                 format!("Stream error: {}", e)
                             )));
                         }
-                        None => return None,
+                        Ok(None) => return None,
                     };
                     if let Some(chunk) = self.handle_gemini_sse_event(event).await? {
                         return Some(Ok(chunk));

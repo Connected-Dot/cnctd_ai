@@ -18,6 +18,11 @@ use crate::stream::CompletionStream;
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const API_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 4096;
+/// How long a connection to the API may take to open.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// How long the response headers may take to arrive once sent (the body is
+/// unbounded here: a stream runs for as long as the turn does).
+const RESPONSE_HEADERS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 pub(super) async fn complete(
     config: &AnthropicConfig,
@@ -59,13 +64,22 @@ async fn send(config: &AnthropicConfig, body: &Value) -> Result<reqwest::Respons
             .map_err(|e| crate::error::Error::Other(format!("Invalid API version: {}", e)))?,
     );
 
-    let response = reqwest::Client::new()
-        .post(API_URL)
-        .headers(headers)
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| crate::error::Error::Other(format!("HTTP request failed: {}", e)))?;
+    // Bounded waits on the way in: connecting, and the response headers (a
+    // stream's first bytes). Neither bounds the body, which a long turn streams
+    // for minutes; `CompletionStream`'s inactivity timeout covers that.
+    let client = reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .build()
+        .map_err(|e| crate::error::Error::Other(format!("HTTP client: {}", e)))?;
+    let response = tokio::time::timeout(
+        RESPONSE_HEADERS_TIMEOUT,
+        client.post(API_URL).headers(headers).json(body).send(),
+    )
+    .await
+    .map_err(|_| crate::error::Error::StreamInactivityTimeout {
+        elapsed_ms: RESPONSE_HEADERS_TIMEOUT.as_millis() as u64,
+    })?
+    .map_err(|e| crate::error::Error::Other(format!("HTTP request failed: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();

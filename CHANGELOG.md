@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-10-12
+
+A model that thinks for a while no longer looks like a dead stream.
+
+### Fixed
+- **`CompletionStream`'s inactivity timeout bounds each provider read, not the
+  whole pump.** Under `display: "omitted"` (the default on Opus 5.5 / Fable 5)
+  a thinking model sends `thinking_delta` events with no text for as long as it
+  thinks, and none becomes a chunk; the old wrapper around the whole `next()`
+  counted that as silence and failed the stream with `StreamInactivityTimeout`
+  after 90 s. Provider events are activity now; a provider that stops sending
+  bytes for 90 s still fails the same way.
+- **Anthropic requests have bounded waits on the way in**: a 15 s connect
+  timeout and a 120 s wait for the response headers (`StreamInactivityTimeout`,
+  so the retry policy retries it). The body stays unbounded: a stream runs for
+  as long as the turn does.
+
 ## [0.3.0] - 2026-10-06
 
 Prompt caching that works end to end. Breaking: `Usage::prompt_tokens` now
