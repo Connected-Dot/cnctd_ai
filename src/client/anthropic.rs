@@ -355,14 +355,15 @@ fn user_message(msg: &crate::message::Message) -> Value {
 
         if let Some(images) = &msg.images {
             for image in images {
-                content_blocks.push(json!({
-                    "type": "image",
-                    "source": {
+                let source = match &image.url {
+                    Some(url) if !url.is_empty() => json!({ "type": "url", "url": url }),
+                    _ => json!({
                         "type": "base64",
                         "media_type": image.media_type,
                         "data": image.data
-                    }
-                }));
+                    }),
+                };
+                content_blocks.push(json!({ "type": "image", "source": source }));
             }
         }
 
@@ -670,6 +671,26 @@ mod tests {
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 4);
         assert_eq!(msgs[1], json!({ "role": "assistant", "content": "from gemini" }));
+    }
+
+    #[test]
+    fn user_image_by_url_renders_a_url_source() {
+        use crate::message::{ImageContent, Message};
+        let msg = Message::user_with_images(
+            "what record is this?",
+            vec![
+                ImageContent::from_url("https://example.test/a.jpg", "image/jpeg"),
+                ImageContent::new("QUJD", "image/png"),
+            ],
+        );
+        let rendered = user_message(&msg);
+        let blocks = rendered["content"].as_array().unwrap();
+        let images: Vec<&Value> = blocks.iter().filter(|b| b["type"] == "image").collect();
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0]["source"]["type"], "url");
+        assert_eq!(images[0]["source"]["url"], "https://example.test/a.jpg");
+        assert_eq!(images[1]["source"]["type"], "base64");
+        assert_eq!(images[1]["source"]["data"], "QUJD");
     }
 
     #[test]

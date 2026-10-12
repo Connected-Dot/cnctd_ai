@@ -14,6 +14,8 @@ pub(super) async fn complete(
         ChatCompletionRequestUserMessageArgs, ChatCompletionRequestAssistantMessageArgs,
         ChatCompletionRequestToolMessageArgs, ChatCompletionTool, ChatCompletionTools,
         ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
+        ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
+        ChatCompletionRequestMessageContentPartText, ChatCompletionRequestMessageContentPartImage,
         FunctionObject, CreateChatCompletionRequestArgs,
     };
 
@@ -52,10 +54,33 @@ pub(super) async fn complete(
                             .build()?
                     ));
                 } else {
-                    // Regular user message
+                    // Regular user message: text, and any images as parts (by URL or
+                    // as a data: URL of the bytes).
+                    let content = match msg.images.as_ref().filter(|i| !i.is_empty()) {
+                        Some(images) => {
+                            let mut parts: Vec<ChatCompletionRequestUserMessageContentPart> = Vec::new();
+                            if !msg.content.is_empty() {
+                                parts.push(ChatCompletionRequestUserMessageContentPart::Text(
+                                    ChatCompletionRequestMessageContentPartText { text: msg.content.clone() },
+                                ));
+                            }
+                            for image in images {
+                                parts.push(ChatCompletionRequestUserMessageContentPart::ImageUrl(
+                                    ChatCompletionRequestMessageContentPartImage {
+                                        image_url: async_openai::types::chat::ImageUrl {
+                                            url: image.as_data_or_url(),
+                                            detail: None,
+                                        },
+                                    },
+                                ));
+                            }
+                            ChatCompletionRequestUserMessageContent::Array(parts)
+                        }
+                        None => ChatCompletionRequestUserMessageContent::Text(msg.content.clone()),
+                    };
                     messages.push(ChatCompletionRequestMessage::User(
                         ChatCompletionRequestUserMessageArgs::default()
-                            .content(msg.content.clone())
+                            .content(content)
                             .build()?
                     ));
                 }
@@ -224,6 +249,8 @@ pub(super) async fn stream(
         ChatCompletionRequestUserMessageArgs, ChatCompletionRequestAssistantMessageArgs,
         ChatCompletionRequestToolMessageArgs, ChatCompletionTool, ChatCompletionTools,
         ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
+        ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
+        ChatCompletionRequestMessageContentPartText, ChatCompletionRequestMessageContentPartImage,
         FunctionObject, CreateChatCompletionRequestArgs, ChatCompletionStreamOptions,
     };
 
@@ -262,10 +289,33 @@ pub(super) async fn stream(
                             .build()?
                     ));
                 } else {
-                    // Regular user message
+                    // Regular user message: text, and any images as parts (by URL or
+                    // as a data: URL of the bytes).
+                    let content = match msg.images.as_ref().filter(|i| !i.is_empty()) {
+                        Some(images) => {
+                            let mut parts: Vec<ChatCompletionRequestUserMessageContentPart> = Vec::new();
+                            if !msg.content.is_empty() {
+                                parts.push(ChatCompletionRequestUserMessageContentPart::Text(
+                                    ChatCompletionRequestMessageContentPartText { text: msg.content.clone() },
+                                ));
+                            }
+                            for image in images {
+                                parts.push(ChatCompletionRequestUserMessageContentPart::ImageUrl(
+                                    ChatCompletionRequestMessageContentPartImage {
+                                        image_url: async_openai::types::chat::ImageUrl {
+                                            url: image.as_data_or_url(),
+                                            detail: None,
+                                        },
+                                    },
+                                ));
+                            }
+                            ChatCompletionRequestUserMessageContent::Array(parts)
+                        }
+                        None => ChatCompletionRequestUserMessageContent::Text(msg.content.clone()),
+                    };
                     messages.push(ChatCompletionRequestMessage::User(
                         ChatCompletionRequestUserMessageArgs::default()
-                            .content(msg.content.clone())
+                            .content(content)
                             .build()?
                     ));
                 }

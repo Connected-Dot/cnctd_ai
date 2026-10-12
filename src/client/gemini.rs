@@ -288,6 +288,12 @@ fn user_content(msg: &Message) -> Value {
             parts.push(json!({ "inlineData": { "mimeType": doc.media_type, "data": doc.data } }));
         }
         for image in msg.images.iter().flatten() {
+            if image.data.is_empty() {
+                // Gemini takes inline bytes only; the caller gives it `data`.
+                eprintln!("[cnctd_ai] Gemini cannot fetch an image by URL; give it bytes");
+                parts.push(json!({ "text": "[an image the model could not be given]" }));
+                continue;
+            }
             parts.push(json!({ "inlineData": { "mimeType": image.media_type, "data": image.data } }));
         }
         for video in msg.videos.iter().flatten() {

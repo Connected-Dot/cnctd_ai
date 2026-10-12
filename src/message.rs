@@ -30,10 +30,16 @@ impl CacheControl {
 /// Supports base64-encoded image data
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ImageContent {
-    /// Base64-encoded image data (without data URL prefix)
+    /// Base64-encoded image data (without data URL prefix). Empty when the
+    /// image is given by `url`.
     pub data: String,
     /// MIME type (image/jpeg, image/png, image/webp, image/gif)
     pub media_type: String,
+    /// The image by URL instead of bytes (0.4.0): Anthropic and OpenAI fetch
+    /// it themselves, so a conversation full of photos never carries them
+    /// in the request. Gemini takes inline bytes only; give it `data`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 impl ImageContent {
@@ -42,6 +48,29 @@ impl ImageContent {
         Self {
             data: data.into(),
             media_type: media_type.into(),
+            url: None,
+        }
+    }
+
+    /// An image the provider fetches by URL (a presigned link, a public file).
+    pub fn from_url(url: impl Into<String>, media_type: impl Into<String>) -> Self {
+        Self {
+            data: String::new(),
+            media_type: media_type.into(),
+            url: Some(url.into()),
+        }
+    }
+
+    /// Given by URL rather than bytes.
+    pub fn is_url(&self) -> bool {
+        self.url.as_deref().is_some_and(|u| !u.is_empty())
+    }
+
+    /// A `data:` URL of the bytes (OpenAI's inline form), or the URL itself.
+    pub fn as_data_or_url(&self) -> String {
+        match &self.url {
+            Some(u) if !u.is_empty() => u.clone(),
+            _ => format!("data:{};base64,{}", self.media_type, self.data),
         }
     }
 

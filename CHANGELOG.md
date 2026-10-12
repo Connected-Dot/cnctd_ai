@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-10-12
+
+Images by URL. Breaking: `ImageContent` gains a public `url` field (construct
+through `ImageContent::new` / `from_url`).
+
+### Added
+- **`ImageContent::from_url`**: an image the provider fetches itself. Anthropic
+  renders it as a `url` image source and OpenAI as an `image_url` part, so a
+  conversation full of photos never carries their bytes in the request.
+  Gemini takes inline bytes only — give it `data`; a URL-only image there is
+  named in a text part, not sent.
+- **OpenAI user messages carry images at all** (they were dropped before):
+  text and images as content parts, inline bytes as a `data:` URL.
+
 ## [0.3.1] - 2026-10-12
 
 A model that thinks for a while no longer looks like a dead stream.
